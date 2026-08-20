@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.vite/
+supabase/.branches/
+supabase/.temp/
+AGENTS.md

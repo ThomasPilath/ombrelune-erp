@@ -1,0 +1,9 @@
+services:
+  ombrelune:
+    image: ${DOCKERHUB_USERNAME}/ombrelune-erp:${OMBRELUNE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${OMBRELUNE_PORT:-8080}:80"
+    environment:
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
