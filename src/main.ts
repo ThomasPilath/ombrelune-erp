@@ -6,8 +6,11 @@ import { startRouter } from "./core/router";
 import { hasDirectionAccess } from "./core/employee-session";
 import { getPage } from "./core/pages";
 import { showToast } from "./ui/components/toast";
+import { getPublicEnv } from "./config/env";
+import { initializeAnalytics } from "./core/analytics";
 
 applyInitialTheme();
+initializeAnalytics(getPublicEnv());
 document.documentElement.style.removeProperty("background-color");
 document.documentElement.style.removeProperty("color");
 

@@ -24,9 +24,13 @@ Variables publiques requises :
 ```dotenv
 VITE_SUPABASE_URL=https://supabase.example.com
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+VITE_UMAMI_SCRIPT_URL=https://cloud.umami.is/script.js
+VITE_UMAMI_WEBSITE_ID=00000000-0000-0000-0000-000000000000
 ```
 
 La clé publique est nécessairement visible dans le navigateur. Ne jamais utiliser une clé `secret` ou `service_role` dans le frontend.
+
+Les deux variables Umami sont optionnelles, mais doivent être renseignées ensemble pour activer les statistiques. Pour une instance auto-hébergée, utiliser l’URL de script fournie par son écran **Tracking code**. Le suivi respecte le réglage « Do Not Track » du navigateur.
 
 ## Vérifications
 
@@ -47,6 +51,8 @@ docker build -t ombrelune-erp:local .
 docker run --rm -p 8080:80 \
   -e VITE_SUPABASE_URL=https://supabase.example.com \
   -e VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_... \
+  -e VITE_UMAMI_SCRIPT_URL=https://cloud.umami.is/script.js \
+  -e VITE_UMAMI_WEBSITE_ID=00000000-0000-0000-0000-000000000000 \
   ombrelune-erp:local
 ```
 
@@ -76,7 +82,9 @@ Le fichier `compose.portainer.yml` déploie l’application. Dans les variables 
 - `OMBRELUNE_VERSION` (par exemple `1.0.0`, ou `latest`) ;
 - `OMBRELUNE_PORT` (par défaut `8080`) ;
 - `VITE_SUPABASE_URL`, URL publique HTTPS du gateway Supabase ;
-- `VITE_SUPABASE_PUBLISHABLE_KEY`, clé publique Supabase.
+- `VITE_SUPABASE_PUBLISHABLE_KEY`, clé publique Supabase ;
+- `VITE_UMAMI_SCRIPT_URL`, URL `src` du code de suivi Umami (optionnelle) ;
+- `VITE_UMAMI_WEBSITE_ID`, identifiant du site Umami (optionnel, à renseigner avec l’URL).
 
 Supabase self-hosted est une stack multi-conteneurs indépendante. Utiliser la release officielle épinglée et son `.env`, puis l’importer comme seconde stack Portainer. Une machine de 4 Go de RAM et 2 CPU est le minimum officiel ; 8 Go et 4 CPU sont recommandés. Après son démarrage, appliquer `supabase/migrations/20260820000000_initial_schema.sql`, puis éventuellement `supabase/seed.sql` sur une base neuve.
 

@@ -77,10 +77,11 @@ function tabs(outlet: HTMLElement, items: Tab[], render: (id: string, content: H
 }
 
 async function renderLogs(outlet: HTMLElement): Promise<void> {
-  const entries = (await rows("journal_actions", "*,clients(nom_prenom)")).sort((a, b) => +new Date(String(b.created_at)) - +new Date(String(a.created_at)));
-  const options = (key: string): string[] => [...new Set(entries.map(item => String(item[key] ?? "")).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
-  outlet.innerHTML = panel("Journal d’activité", `<div class="border-b p-4"><button type="button" data-filter-toggle aria-expanded="false" aria-controls="log-filters" class="flex min-h-11 w-full items-center justify-between rounded-xl border px-4 font-bold md:hidden"><span>Afficher les filtres</span><span aria-hidden="true">＋</span></button><div id="log-filters" data-filter-panel class="mt-3 hidden gap-3 md:mt-0 md:grid md:grid-cols-2"><input data-search type="search" placeholder="Élément, client…" class="${field}" aria-label="Recherche libre"><select data-employee aria-label="Filtrer par employé" class="${field}"><option value="">Tous les employés</option>${options("employe_nom").map(value => `<option>${escapeHtml(value)}</option>`).join("")}</select><select data-type aria-label="Filtrer par type d’entité" class="${field}"><option value="">Tous les types</option>${options("entite_type").map(value => `<option>${escapeHtml(value)}</option>`).join("")}</select><select data-action aria-label="Filtrer par action" class="${field}"><option value="">Toutes les actions</option>${options("action").map(value => `<option>${escapeHtml(value)}</option>`).join("")}</select><div class="grid grid-cols-2 gap-3 md:col-span-2"><label class="text-xs font-bold text-muted">Depuis<input data-from type="date" class="mt-1 ${field}"></label><label class="text-xs font-bold text-muted">Jusqu’au<input data-to type="date" class="mt-1 ${field}"></label></div><button type="button" data-reset class="min-h-11 rounded-xl border px-4 font-bold md:col-span-2">Réinitialiser les filtres</button></div></div><p data-count class="border-b px-4 py-3 text-sm text-muted" aria-live="polite"></p><div data-list></div>`);
-  const controls = [...outlet.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")];
+  const pageSize = 25;
+  let page = 1;
+  let entries: Row[] = [];
+  let total = 0;
+  outlet.innerHTML = panel("Journal d’activité", `<div class="border-b p-4"><button type="button" data-filter-toggle aria-expanded="false" aria-controls="log-filters" class="flex min-h-11 w-full items-center justify-between rounded-xl border px-4 font-bold md:hidden"><span>Afficher les filtres</span><span aria-hidden="true">＋</span></button><div id="log-filters" data-filter-panel class="mt-3 hidden gap-3 md:mt-0 md:grid md:grid-cols-2"><input data-search type="search" placeholder="Élément, client…" class="${field}" aria-label="Recherche libre"><select data-employee aria-label="Filtrer par employé" class="${field}"><option value="">Tous les employés</option></select><select data-type aria-label="Filtrer par type d’entité" class="${field}"><option value="">Tous les types</option></select><select data-action aria-label="Filtrer par action" class="${field}"><option value="">Toutes les actions</option></select><div class="grid grid-cols-2 gap-3 md:col-span-2"><label class="text-xs font-bold text-muted">Depuis<input data-from type="date" class="mt-1 ${field}"></label><label class="text-xs font-bold text-muted">Jusqu’au<input data-to type="date" class="mt-1 ${field}"></label></div><button type="button" data-reset class="min-h-11 rounded-xl border px-4 font-bold md:col-span-2">Réinitialiser les filtres</button></div></div><p data-count class="border-b px-4 py-3 text-sm text-muted" aria-live="polite"></p><div data-list></div><nav data-pagination class="flex items-center justify-between gap-3 border-t p-4" aria-label="Pagination du journal"><button type="button" data-previous class="min-h-11 rounded-xl border px-4 font-bold disabled:opacity-40">Précédent</button><span data-page class="text-sm font-bold"></span><button type="button" data-next class="min-h-11 rounded-xl border px-4 font-bold disabled:opacity-40">Suivant</button></nav>`);
   const get = (selector: string): HTMLInputElement | HTMLSelectElement => outlet.querySelector(selector)!;
   const list = outlet.querySelector<HTMLElement>("[data-list]")!; const count = outlet.querySelector<HTMLElement>("[data-count]")!;
   const openDetails = (entry: Row, trigger: HTMLButtonElement): void => {
@@ -104,18 +105,40 @@ async function renderLogs(outlet: HTMLElement): Promise<void> {
     dialog.showModal();
   };
   const draw = (): void => {
-    const term = get("[data-search]").value.trim().toLocaleLowerCase("fr"); const from = get("[data-from]").value; const to = get("[data-to]").value;
-    const filtered = entries.filter(entry => {
-      const client = entry.clients as Row | null; const created = String(entry.created_at).slice(0, 10);
-      const text = `${entry.libelle ?? entry.element ?? ""} ${client?.nom_prenom ?? ""} ${entry.entite_id ?? ""}`.toLocaleLowerCase("fr");
-      return (!term || text.includes(term)) && (!get("[data-employee]").value || entry.employe_nom === get("[data-employee]").value) && (!get("[data-type]").value || entry.entite_type === get("[data-type]").value) && (!get("[data-action]").value || entry.action === get("[data-action]").value) && (!from || created >= from) && (!to || created <= to);
-    });
-    count.textContent = `${filtered.length} action${filtered.length > 1 ? "s" : ""} affichée${filtered.length > 1 ? "s" : ""} sur ${entries.length}`;
-    list.innerHTML = table(["Date", "Employé", "Action", "Type", "Élément", "Résultat", "Détails"], filtered.map(entry => [new Date(String(entry.created_at)).toLocaleString("fr-FR"), escapeHtml(entry.employe_nom), escapeHtml(entry.action), escapeHtml(entry.entite_type), escapeHtml(entry.element ?? entry.libelle), escapeHtml(entry.resultat), `<button type="button" data-log-details="${entries.indexOf(entry)}" class="inline-flex min-h-11 items-center rounded-xl border border-brand px-3 font-bold text-brand hover:bg-surface-muted" aria-label="Voir les détails de ${escapeHtml(entry.action)}">Voir</button>`]));
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const first = total ? (page - 1) * pageSize + 1 : 0;
+    const last = Math.min(page * pageSize, total);
+    count.textContent = total ? `Actions ${first} à ${last} sur ${total}` : "Aucune action correspondante";
+    list.innerHTML = table(["Date", "Employé", "Action", "Type", "Élément", "Résultat", "Détails"], entries.map((entry, index) => [new Date(String(entry.created_at)).toLocaleString("fr-FR"), escapeHtml(entry.employe_nom), escapeHtml(entry.action), escapeHtml(entry.entite_type), escapeHtml(entry.element ?? entry.libelle), escapeHtml(entry.resultat), `<button type="button" data-log-details="${index}" class="inline-flex min-h-11 items-center rounded-xl border border-brand px-3 font-bold text-brand hover:bg-surface-muted" aria-label="Voir les détails de ${escapeHtml(entry.action)}">Voir</button>`]));
     list.querySelectorAll<HTMLButtonElement>("[data-log-details]").forEach(button => button.addEventListener("click", () => openDetails(entries[Number(button.dataset.logDetails)]!, button)));
+    outlet.querySelector<HTMLElement>("[data-page]")!.textContent = `Page ${page} sur ${pageCount}`;
+    outlet.querySelector<HTMLButtonElement>("[data-previous]")!.disabled = page <= 1;
+    outlet.querySelector<HTMLButtonElement>("[data-next]")!.disabled = page >= pageCount;
+    labelTableControls(list);
   };
-  controls.forEach(control => control.addEventListener("input", draw));
-  outlet.querySelector("[data-reset]")!.addEventListener("click", () => { controls.forEach(control => { control.value = ""; }); draw(); });
+  const pageSchema = z.object({ entries: z.array(rowSchema), total: z.coerce.number().int().nonnegative(), employees: z.array(z.string()), actions: z.array(z.string()), entity_types: z.array(z.string()) });
+  const fillOptions = (selector: string, values: string[]): void => {
+    const select = get(selector) as HTMLSelectElement;
+    const current = select.value;
+    const first = select.options[0]!.outerHTML;
+    select.innerHTML = `${first}${values.map(value => `<option>${escapeHtml(value)}</option>`).join("")}`;
+    select.value = current;
+  };
+  const load = async (): Promise<void> => {
+    list.innerHTML = asyncState("loading");
+    const { data, error } = await getSupabaseClient().rpc("lister_journal_actions", { p_page: page, p_page_size: pageSize, p_recherche: get("[data-search]").value, p_employe: get("[data-employee]").value, p_type: get("[data-type]").value, p_action: get("[data-action]").value, p_depuis: get("[data-from]").value || null, p_jusqu_a: get("[data-to]").value || null });
+    if (error) throw new Error(error.message);
+    const result = pageSchema.parse(data);
+    entries = result.entries; total = result.total;
+    fillOptions("[data-employee]", result.employees); fillOptions("[data-type]", result.entity_types); fillOptions("[data-action]", result.actions);
+    draw();
+  };
+  let searchTimer: number | undefined;
+  get("[data-search]").addEventListener("input", () => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => { page = 1; void load(); }, 300); });
+  ["[data-employee]", "[data-type]", "[data-action]", "[data-from]", "[data-to]"].forEach(selector => get(selector).addEventListener("input", () => { page = 1; void load(); }));
+  outlet.querySelector("[data-reset]")!.addEventListener("click", () => { outlet.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select").forEach(control => { control.value = ""; }); page = 1; void load(); });
+  outlet.querySelector("[data-previous]")!.addEventListener("click", () => { if (page > 1) { page -= 1; void load(); } });
+  outlet.querySelector("[data-next]")!.addEventListener("click", () => { if (page * pageSize < total) { page += 1; void load(); } });
   const filterToggle = outlet.querySelector<HTMLButtonElement>("[data-filter-toggle]")!;
   const filterPanel = outlet.querySelector<HTMLElement>("[data-filter-panel]")!;
   filterToggle.addEventListener("click", () => {
@@ -126,7 +149,7 @@ async function renderLogs(outlet: HTMLElement): Promise<void> {
     filterPanel.classList.toggle("hidden", expanded);
     filterPanel.classList.toggle("grid", !expanded);
   });
-  draw();
+  await load();
 }
 
 async function renderSummary(outlet: HTMLElement): Promise<void> {
@@ -136,8 +159,26 @@ async function renderSummary(outlet: HTMLElement): Promise<void> {
   const sales = transactions.filter(item => ["Vente", "Vente Employé"].includes(String(item.type_transaction))).reduce((sum, item) => sum + Number(item.prix_total), 0);
   const expenses = -transactions.filter(item => !["Vente", "Vente Employé"].includes(String(item.type_transaction))).reduce((sum, item) => sum + Number(item.prix_total), 0);
   const cards = [["Chiffre d’affaires", sales], ["Dépenses", expenses], ["Résultat brut", sales - expenses]];
-  outlet.innerHTML = `${current ? `<div class="grid gap-3 sm:grid-cols-3">${cards.map(([label, value]) => `<section class="rounded-2xl border bg-surface p-5"><p class="text-sm text-muted">${label}</p><strong class="mt-1 block text-2xl">${money.format(Number(value))} PO</strong></section>`).join("")}</div><div class="mt-5">${panel("Période en cours", `<div class="p-5"><p>Ouverte depuis le <strong>${date(current.date_debut)}</strong> · ${escapeHtml(current.jours_ouverts)} jour(s)</p><p class="mt-2 text-sm text-muted">${current.cloture_recommandee ? "La clôture est recommandée." : `${current.jours_avant_cloture} jour(s) avant la clôture recommandée.`}</p><details class="mt-5 rounded-xl border"><summary class="cursor-pointer p-4 font-bold">Clôturer la période</summary><form data-close-period class="border-t p-4"><label class="block text-sm font-bold">Date de fin<input name="end" type="date" required min="${escapeHtml(current.date_debut)}" value="${new Date().toISOString().slice(0, 10)}" class="mt-2 ${field}"></label><p class="mt-4 text-sm text-muted">Renseignez le total payé et la prime de chaque employé pour créer ses archives RH.</p><div class="mt-3 grid gap-3">${performances.map(person => `<div class="grid gap-3 rounded-xl bg-surface-muted p-3 sm:grid-cols-[1fr_10rem_10rem]"><strong>${escapeHtml(person.nom_prenom)}</strong><label class="text-xs font-bold">Prime<input data-prime="${escapeHtml(person.employe_id)}" type="number" min="0" value="${escapeHtml(person.prime_actuelle ?? 0)}" class="mt-1 ${field}"></label><label class="text-xs font-bold">Total payé<input data-paid="${escapeHtml(person.employe_id)}" type="number" min="0" value="${escapeHtml(person.prime_actuelle ?? 0)}" class="mt-1 ${field}"></label></div>`).join("")}</div><button class="mt-4 ${button}">Clôturer et ouvrir la période suivante</button></form></details></div>`)}</div>` : panel("Période comptable", '<p class="p-6 text-muted">Aucune période ouverte.</p>')}<div class="mt-5">${panel("Historique financier", table(["Période", "CA", "Dépenses", "Taxes", "Salaires & primes", "Résultat net"], history.map(period => [`${date(period.date_debut)} — ${date(period.date_fin)}`, `${money.format(Number(period.ca_total))} PO`, `${money.format(Number(period.depenses))} PO`, `${money.format(Number(period.taxes))} PO`, `${money.format(Number(period.salaires_primes))} PO`, `<strong>${money.format(Number(period.benefice_net))} PO</strong>`])))}</div>`;
-  outlet.querySelector<HTMLFormElement>("[data-close-period]")?.addEventListener("submit", async event => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; const remunerations = performances.map(person => ({ employe_id: person.employe_id, prime: Number(form.querySelector<HTMLInputElement>(`[data-prime="${person.employe_id}"]`)!.value), total_paye: Number(form.querySelector<HTMLInputElement>(`[data-paid="${person.employe_id}"]`)!.value) })); try { await callRpc("cloturer_periode", { p_date_fin: new FormData(form).get("end"), p_remunerations: remunerations }, z.coerce.number()); showToast("Période clôturée et archives RH créées.", "success"); await renderSummary(outlet); } catch (error) { showToast(error instanceof Error ? error.message : "Clôture impossible.", "error"); } });
+  outlet.innerHTML = `${current ? `<div class="grid gap-3 sm:grid-cols-3">${cards.map(([label, value]) => `<section class="rounded-2xl border bg-surface p-5"><p class="text-sm text-muted">${label}</p><strong class="mt-1 block text-2xl">${money.format(Number(value))} PO</strong></section>`).join("")}</div><div class="mt-5">${panel("Période en cours", `<div class="p-5"><p>Ouverte depuis le <strong>${date(current.date_debut)}</strong> · ${escapeHtml(current.jours_ouverts)} jour(s)</p><p class="mt-2 text-sm text-muted">${current.cloture_recommandee ? "La clôture est recommandée." : `${current.jours_avant_cloture} jour(s) avant la clôture recommandée.`}</p><details class="mt-5 rounded-xl border"><summary class="cursor-pointer p-4 font-bold">Clôturer la période</summary><form data-close-period class="border-t p-4"><label class="block text-sm font-bold">Date de fin<input name="end" type="date" required min="${escapeHtml(current.date_debut)}" value="${new Date().toISOString().slice(0, 10)}" class="mt-2 ${field}"></label><p class="mt-4 text-sm text-muted">Renseignez le total payé et la prime de chaque employé pour créer ses archives RH.</p><div class="mt-3 grid gap-3">${performances.map(person => `<div class="grid gap-3 rounded-xl bg-surface-muted p-3 sm:grid-cols-[1fr_10rem_10rem]"><strong>${escapeHtml(person.nom_prenom)}</strong><label class="text-xs font-bold">Prime<input data-prime="${escapeHtml(person.employe_id)}" type="number" min="0" value="${escapeHtml(person.prime_actuelle ?? 0)}" class="mt-1 ${field}"></label><label class="text-xs font-bold">Total payé<input data-paid="${escapeHtml(person.employe_id)}" type="number" min="0" value="${escapeHtml(person.prime_actuelle ?? 0)}" class="mt-1 ${field}"></label></div>`).join("")}</div><fieldset class="mt-5 rounded-xl border border-amber-500/60 p-4"><legend class="px-2 font-bold">Journal technique</legend><label class="flex min-h-11 cursor-pointer items-center gap-3"><input data-purge-audit type="checkbox" class="size-5"><span>Purger le journal technique lors de cette clôture</span></label><p class="mt-2 text-sm text-muted">Option facultative. Le journal métier reste conservé pour les analyses de la Direction.</p><label data-backup-confirmation class="mt-3 hidden min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-amber-500/10 p-3 text-sm font-bold"><input data-backup-confirm type="checkbox" class="mt-0.5 size-5"><span>Je confirme avoir effectué et vérifié une sauvegarde récente de la base. La purge est irréversible.</span></label></fieldset><button class="mt-4 ${button}">Clôturer et ouvrir la période suivante</button></form></details></div>`)}</div>` : panel("Période comptable", '<p class="p-6 text-muted">Aucune période ouverte.</p>')}<div class="mt-5">${panel("Historique financier", table(["Période", "CA", "Dépenses", "Taxes", "Salaires & primes", "Résultat net"], history.map(period => [`${date(period.date_debut)} — ${date(period.date_fin)}`, `${money.format(Number(period.ca_total))} PO`, `${money.format(Number(period.depenses))} PO`, `${money.format(Number(period.taxes))} PO`, `${money.format(Number(period.salaires_primes))} PO`, `<strong>${money.format(Number(period.benefice_net))} PO</strong>`])))}</div>`;
+  const form = outlet.querySelector<HTMLFormElement>("[data-close-period]");
+  const purgeAudit = form?.querySelector<HTMLInputElement>("[data-purge-audit]");
+  const backupConfirmation = form?.querySelector<HTMLElement>("[data-backup-confirmation]");
+  const backupConfirmed = form?.querySelector<HTMLInputElement>("[data-backup-confirm]");
+  purgeAudit?.addEventListener("change", () => {
+    backupConfirmation?.classList.toggle("hidden", !purgeAudit.checked);
+    backupConfirmation?.classList.toggle("flex", purgeAudit.checked);
+    if (backupConfirmed) { backupConfirmed.required = purgeAudit.checked; if (!purgeAudit.checked) backupConfirmed.checked = false; }
+  });
+  form?.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (purgeAudit?.checked && !backupConfirmed?.checked) { showToast("Confirmez la sauvegarde avant la purge.", "error"); backupConfirmed?.focus(); return; }
+    const remunerations = performances.map(person => ({ employe_id: person.employe_id, prime: Number(form.querySelector<HTMLInputElement>(`[data-prime="${person.employe_id}"]`)!.value), total_paye: Number(form.querySelector<HTMLInputElement>(`[data-paid="${person.employe_id}"]`)!.value) }));
+    try {
+      const result = await callRpc("cloturer_periode_avec_audit", { p_employe_id: employeeId(), p_date_fin: new FormData(form).get("end"), p_remunerations: remunerations, p_purger_audit: purgeAudit?.checked ?? false, p_sauvegarde_confirmee: backupConfirmed?.checked ?? false }, z.object({ periode_id: z.coerce.number(), audit_rows_deleted: z.coerce.number().int().nonnegative() }));
+      showToast(result.audit_rows_deleted ? `Période clôturée et ${result.audit_rows_deleted} trace(s) technique(s) purgée(s).` : "Période clôturée et archives RH créées.", "success");
+      await renderSummary(outlet);
+    } catch (error) { showToast(error instanceof Error ? error.message : "Clôture impossible.", "error"); }
+  });
 }
 
 async function renderExpenses(outlet: HTMLElement): Promise<void> {
