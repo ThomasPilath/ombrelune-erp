@@ -1,5 +1,11 @@
 -- Données locales de développement de la nouvelle version d’Ombrelune ERP.
 -- Aucun journal, vente, commande, archive ou mouvement de trésorerie n’est préchargé.
+-- Le coffre démarre avec le solde réel constaté avant l'utilisation de l'ERP.
+
+update public.parametres_erp
+set solde_reference_tresorerie = 2369259,
+    reference_tresorerie_at = now()
+where id;
 
 insert into public.periodes_comptables (date_debut) values (current_date);
 

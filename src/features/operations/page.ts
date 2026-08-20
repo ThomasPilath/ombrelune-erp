@@ -5,6 +5,7 @@ import { asyncState, bindRetry } from "../../ui/components/async-state";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
 import { CraftPlanner } from "../craft/planner";
+import { craftStockNeeds, getCraftRecipes, type CraftStockNeed } from "../../data/repositories/craft";
 import { searchClients } from "../../data/repositories/pos";
 import { icon } from "../../ui/icons";
 import { panel } from "../../ui/components/panel";
@@ -41,9 +42,26 @@ async function employeeRows(source: string, employeeId: string | number, select 
 }
 
 async function renderCraft(outlet: HTMLElement): Promise<void> {
-  outlet.innerHTML = panel("Lancer une fabrication", '<div id="craft-planner" class="p-5"></div>');
-  const planner = new CraftPlanner(outlet.querySelector<HTMLElement>("#craft-planner")!, { maxItems: 3 });
+  const needsHtml = (needs: CraftStockNeed[]): string => needs.length
+    ? `<ul class="divide-y">${needs.map(need => `<li class="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-center sm:gap-6"><span><strong>${escapeHtml(need.article)}</strong>${need.resourceUnavailable ? '<span class="mt-1 block text-sm font-bold text-red-600 dark:text-red-400">Ressource indisponible</span>' : ""}</span><span class="text-sm text-muted">Stock : ${need.current} / minimum : ${need.minimum}</span><span class="font-bold text-amber-600 dark:text-amber-400">Manque ${need.missing} · estimation : ${need.craftCount} craft(s)</span><button type="button" data-load-stock-need="${escapeHtml(need.productId)}" class="min-h-11 rounded-xl border border-brand px-3 font-bold text-brand">Charger dans l’outil</button></li>`).join("")}</ul>`
+    : '<p class="p-4 text-sm text-muted">Tous les objets craftables respectent leur seuil minimum.</p>';
+  const initialNeeds = craftStockNeeds(await getCraftRecipes());
+  outlet.innerHTML = `${panel("Lancer une fabrication", '<div id="craft-planner" class="p-5"></div>')}<details data-stock-needs ${initialNeeds.length ? "open" : ""} class="mt-5 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><summary class="flex min-h-12 cursor-pointer items-center justify-between gap-4 px-5 py-3 font-bold">Besoins du stock <span data-stock-needs-count class="rounded-full bg-surface-muted px-3 py-1 text-sm text-muted">${initialNeeds.length}</span></summary><div data-stock-needs-list class="border-t" aria-live="polite">${needsHtml(initialNeeds)}</div></details>`;
+  const needsList = outlet.querySelector<HTMLElement>("[data-stock-needs-list]")!;
+  const needsCount = outlet.querySelector<HTMLElement>("[data-stock-needs-count]")!;
+  const plannerRoot = outlet.querySelector<HTMLElement>("#craft-planner")!;
+  const refreshNeeds = async (): Promise<void> => {
+    const needs = craftStockNeeds(await getCraftRecipes());
+    needsList.innerHTML = needsHtml(needs);
+    needsCount.textContent = String(needs.length);
+  };
+  const planner = new CraftPlanner(plannerRoot, { maxItems: 3, onCrafted: refreshNeeds });
   await planner.mount();
+  needsList.addEventListener("click", event => {
+    const button = (event.target as Element).closest<HTMLButtonElement>("[data-load-stock-need]");
+    if (!button) return;
+    planner.selectProduct(button.dataset.loadStockNeed!, 1);
+  });
 }
 
 async function renderPurchase(outlet: HTMLElement): Promise<void> {
@@ -206,7 +224,7 @@ async function renderDirection(outlet: HTMLElement): Promise<void> {
   const domains = [
     { id: "pilotage", label: "Pilotage", icon: "pulse", description: "Suivre les actions sensibles et contrôler l’activité." },
     { id: "finances", label: "Finances", icon: "chart", description: "Analyser les résultats, les périodes et les frais." },
-    { id: "equipe", label: "Équipe & RH", icon: "badge", description: "Gérer les employés et leur historique." },
+    { id: "equipe", label: "Paramètres", icon: "badge", description: "Gérer les employés et les règles de l’ERP." },
     { id: "offre", label: "Offre & stocks", icon: "boxes", description: "Maintenir catalogue, recettes et quantités." }
   ] as const;
   outlet.innerHTML = `<section class="mb-5" aria-labelledby="direction-workspace-title"><p class="text-sm font-bold text-brand">Poste de pilotage</p><h2 id="direction-workspace-title" class="mt-1 text-2xl font-black">Toute la Direction, au même endroit</h2><p class="mt-2 max-w-3xl text-muted">Les outils sont regroupés par responsabilité métier pour éviter de multiplier les pages et les entrées de menu.</p></section><div class="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="Domaines de la Direction">${domains.map((domain, index) => `<button type="button" role="tab" data-direction-domain="${domain.id}" aria-selected="${index === 0}" class="min-h-28 rounded-2xl border bg-surface p-4 text-left shadow-[var(--shadow-panel)] hover:border-brand"><span class="flex items-center gap-2 font-bold text-ink">${icon(domain.icon, "size-5 text-brand")} ${domain.label}</span><span class="mt-2 block text-sm text-muted">${domain.description}</span></button>`).join("")}</div><div id="direction-domain-content" role="tabpanel" aria-live="polite"></div>`;
@@ -225,7 +243,7 @@ async function renderDirection(outlet: HTMLElement): Promise<void> {
     const responsibilities = domainId === "finances"
       ? [["Synthèse financière", "Résultats et périodes comptables"], ["Frais", "Saisie et suivi des dépenses"]]
       : domainId === "equipe"
-        ? [["Employés", "Équipe, grades et primes"], ["Historique RH", "Archives et périodes individuelles"]]
+        ? [["Employés", "Équipe, grades et notes"], ["ERP", "Rémunérations, taxe et accès Direction"]]
         : [["Catalogue", "Articles et tarifs"], ["Recettes", "Composition des fabrications"], ["Stocks", "Quantités et seuils"]];
     content.innerHTML = panel(domain.label, `<div class="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">${responsibilities.map(([title, description]) => `<section class="rounded-xl bg-surface-muted p-4"><h3 class="font-bold">${title}</h3><p class="mt-1 text-sm text-muted">${description}</p><p class="mt-4 text-xs font-bold uppercase tracking-wide text-brand">Fonction à intégrer</p></section>`).join("")}</div>`);
   };

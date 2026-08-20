@@ -8,3 +8,4 @@ supabase/.branches/
 supabase/.temp/
 AGENTS.md
 docker-compose.deploy.yml
+scripts/crash-test.ts

@@ -10,8 +10,8 @@ export const catalogueRowSchema = z.object({
   type_article: z.enum(["objet", "ingredient", "ticket", "document_permis"]).default("objet"),
   type_permis: z.enum(["Balais", "Voiture", "Moto"]).nullable().optional(),
   stocks: z.union([
-    z.object({ quantite: z.coerce.number().int(), stock_max: z.coerce.number().int().nullable().optional() }),
-    z.array(z.object({ quantite: z.coerce.number().int(), stock_max: z.coerce.number().int().nullable().optional() }))
+    z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nullable().optional(), stock_max: z.coerce.number().int().nullable().optional() }),
+    z.array(z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nullable().optional(), stock_max: z.coerce.number().int().nullable().optional() }))
   ]).nullable().optional()
 }).passthrough();
 

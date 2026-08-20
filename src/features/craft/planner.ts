@@ -32,6 +32,23 @@ export class CraftPlanner {
     this.render();
   }
 
+  selectProduct(productId: string, craftCount = 1): boolean {
+    if (!this.products().some(([id]) => id === productId)) return false;
+    const existing = this.selections.find(selection => selection.productId === productId);
+    if (existing) existing.craftCount = Math.max(1, Math.trunc(craftCount));
+    else {
+      const maxItems = this.options.maxItems ?? 3;
+      if (this.selections.length >= maxItems) {
+        showToast(`Retirez une fabrication avant d’en ajouter une nouvelle (maximum ${maxItems}).`, "error");
+        return false;
+      }
+      this.selections.push({ productId, craftCount: Math.max(1, Math.trunc(craftCount)) });
+    }
+    this.completed.delete(productId);
+    this.render();
+    return true;
+  }
+
   private products(): Array<[string, string]> {
     const products = new Map<string, string>();
     this.recipes.forEach(recipe => products.set(idOf(recipe.produit.id), recipe.produit.article));
@@ -79,7 +96,7 @@ export class CraftPlanner {
       const stock = ingredientStock(recipe);
       const total = totals.get(idOf(recipe.ingredient_id)) ?? needed;
       const cumulativeShortage = total > stock;
-      return `<li class="flex items-baseline justify-between gap-4 py-2 ${cumulativeShortage ? "text-amber-600 dark:text-amber-400" : ""}"><span>${escapeHtml(recipe.ingredient.article)}</span><span class="shrink-0"><strong class="text-base">${needed}</strong><span class="text-sm font-normal"> /${stock}</span></span></li>`;
+      return `<li class="flex items-baseline justify-between gap-4 py-2 ${cumulativeShortage ? "text-amber-600 dark:text-amber-400" : ""}"><span>${escapeHtml(recipe.ingredient.article)}${cumulativeShortage ? '<small class="mt-1 block font-bold">Ressource indisponible</small>' : ""}</span><span class="shrink-0"><strong class="text-base">${needed}</strong><span class="text-sm font-normal"> /${stock}</span></span></li>`;
     }).join("") : '<li class="py-3 text-sm text-amber-600 dark:text-amber-400">Aucune recette disponible pour cet objet.</li>';
     const hasCumulativeShortage = recipes.some(recipe => (totals.get(idOf(recipe.ingredient_id)) ?? 0) > ingredientStock(recipe));
     return `<section class="rounded-2xl border ${done ? "bg-surface-muted" : "bg-surface"}" data-craft-line="${index}">

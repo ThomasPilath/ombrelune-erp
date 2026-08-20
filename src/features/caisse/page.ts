@@ -71,7 +71,7 @@ class CashRegister {
   private unitPrice(article: CatalogueRow): number { return this.isEmployeePurchase ? (this.employeeCosts.get(String(article.id)) ?? 0) : (article.prix_vente ?? 0); }
   private total(): number { return [...this.basket].reduce((sum, [id, q]) => sum + (this.article(id) ? this.unitPrice(this.article(id)!) : 0) * q, 0); }
   private basketQuantity(): number { return [...this.basket.values()].reduce((sum, quantity) => sum + quantity, 0); }
-  private canCheckout(): boolean { return this.basket.size > 0 && (!this.ticketQuantity() || this.ticketAuthorized); }
+  private canCheckout(): boolean { return this.basket.size > 0; }
   private assignedPermits(articleId: string): number { return this.permitWithdrawals.filter(item => String(item.article_id) === articleId).length; }
   private shortages(): Array<[CatalogueRow, number]> { return [...this.basket].map(([id, quantity]) => [this.article(id)!, Math.max(0, quantity - stockOf(this.article(id)!))] as [CatalogueRow, number]).filter(([article, shortage]) => !isCompassSupplement(article.article) && shortage > 0); }
   private maximumQuantity(row: CatalogueRow): number {
@@ -96,7 +96,7 @@ class CashRegister {
 
   private articleRow(row: CatalogueRow): string {
     const stock = stockOf(row);
-    return `<button data-add="${escapeHtml(row.id)}" ${!stock && !this.craftableArticleIds.has(String(row.id)) ? "disabled" : ""} class="grid min-h-16 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b px-4 py-3 text-left hover:bg-surface-muted disabled:opacity-45 sm:grid-cols-[minmax(0,1fr)_auto_auto]"><strong class="truncate">${escapeHtml(row.article)}</strong><span class="row-start-2 text-sm text-muted sm:row-start-auto">${stock ? `Stock : ${stock}` : "Rupture"}</span><span class="row-span-2 text-right font-bold sm:row-span-1">${money.format(this.unitPrice(row))} PO${this.isEmployeePurchase ? '<small class="block font-normal text-muted">prix coûtant</small>' : ""}</span></button>`;
+    return `<button data-add="${escapeHtml(row.id)}" ${!stock && !this.craftableArticleIds.has(String(row.id)) ? "disabled" : ""} class="grid min-h-16 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b px-4 py-3 text-left hover:bg-surface-muted disabled:opacity-45 sm:grid-cols-[minmax(0,1fr)_8rem_9rem] sm:gap-x-6"><strong class="truncate">${escapeHtml(row.article)}</strong><span class="row-start-2 text-right text-sm text-muted sm:row-start-auto">${stock ? `Stock : ${stock}` : "Rupture"}</span><span class="row-span-2 text-right font-bold sm:row-span-1">${money.format(this.unitPrice(row))} PO${this.isEmployeePurchase ? '<small class="block font-normal text-muted">prix coûtant</small>' : ""}</span></button>`;
   }
   private basketRow(row: CatalogueRow, quantity: number): string {
     const price = this.unitPrice(row);
@@ -171,12 +171,11 @@ class CashRegister {
     if (!summary || !lines || !actions) return;
     summary.textContent = this.basket.size ? `${this.basket.size} article(s) distinct(s)` : "Ajoutez un article depuis la liste.";
     lines.innerHTML = this.basket.size ? [...this.basket].map(([id, q]) => this.basketRow(this.article(id)!, q)).join("") : '<p class="p-8 text-center text-muted">Le panier est vide.</p>';
-    actions.innerHTML = `<div class="mb-4 flex items-baseline justify-between"><strong>${this.isEmployeePurchase ? "Total à rembourser" : "Total"}</strong><strong class="text-2xl">${money.format(this.total())} PO</strong></div><div class="grid grid-cols-1 gap-3 sm:grid-cols-3"><button id="ticket-action" ${this.ticketQuantity() ? "" : "disabled"} class="min-h-12 rounded-xl border font-bold disabled:opacity-40">${this.ticketAuthorized ? "Ticket ✓" : "Ticket"}</button><button id="craft-action" ${this.shortages().length ? "" : "disabled"} class="min-h-12 rounded-xl border border-brand font-bold text-brand disabled:opacity-40">Craft</button><button id="checkout" ${this.canCheckout() && !this.shortages().length && !this.submitting ? "" : "disabled"} class="min-h-12 rounded-xl bg-brand font-bold text-white disabled:opacity-40">${this.isEmployeePurchase ? "Valider l’achat" : "Valider"}</button></div>`;
+    actions.innerHTML = `<div class="mb-4 flex items-baseline justify-between"><strong>${this.isEmployeePurchase ? "Total à rembourser" : "Total"}</strong><strong class="text-2xl">${money.format(this.total())} PO</strong></div>${this.ticketQuantity() ? `<p class="mb-3 text-sm text-muted">${this.ticketAuthorized ? `Bénéficiaire des tickets : ${escapeHtml(this.ticketClient?.nom_prenom ?? "vérifié")}.` : "Le bénéficiaire des tickets sera vérifié lors de la validation."}</p>` : ""}<div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><button id="craft-action" ${this.shortages().length ? "" : "disabled"} class="min-h-12 rounded-xl border border-brand font-bold text-brand disabled:opacity-40">Craft</button><button id="checkout" ${this.canCheckout() && !this.shortages().length && !this.submitting ? "" : "disabled"} class="min-h-12 rounded-xl bg-brand font-bold text-white disabled:opacity-40">${this.isEmployeePurchase ? "Valider l’achat" : "Valider"}</button></div>`;
     const quantity = this.basketQuantity();
     this.outlet.querySelector<HTMLElement>("#mobile-basket-count")!.textContent = `Panier (${quantity} article${quantity > 1 ? "s" : ""})`;
     this.outlet.querySelector<HTMLElement>("#mobile-basket-total")!.textContent = `${money.format(this.total())} PO`;
     this.outlet.querySelectorAll<HTMLElement>("[data-line]").forEach(el => { const id = el.dataset.line!; const remove = el.querySelector<HTMLElement>("[data-remove]"); const minus = el.querySelector<HTMLElement>("[data-minus]"); const plus = el.querySelector<HTMLElement>("[data-plus]"); const plusTen = el.querySelector<HTMLElement>("[data-plus-ten]"); const quantity = el.querySelector<HTMLInputElement>("[data-quantity]"); remove?.addEventListener("click", () => this.setQuantity(id, 0)); minus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 1) - 1)); plus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 1)); plusTen?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 10)); quantity?.addEventListener("change", event => this.setQuantity(id, Number((event.currentTarget as HTMLInputElement).value))); });
-    this.outlet.querySelector("#ticket-action")!.addEventListener("click", () => this.openTicketDialog());
     this.outlet.querySelector("#craft-action")!.addEventListener("click", () => void this.openCraftDialog());
     this.outlet.querySelector<HTMLButtonElement>("#checkout")!.addEventListener("click", event => void withPending(event.currentTarget as HTMLButtonElement, "Validation…", () => this.submit()));
   }
@@ -289,10 +288,11 @@ class CashRegister {
     } catch (error) { root.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined); }
   }
 
-  private openTicketDialog(): void {
+  private openTicketDialog(): Promise<boolean> {
     const dialog = this.outlet.querySelector<HTMLDialogElement>("#ticket-dialog")!;
     const name = dialog.querySelector<HTMLInputElement>("[data-client-name]")!; const owl = dialog.querySelector<HTMLInputElement>("[data-client-owl]")!;
     const results = dialog.querySelector<HTMLElement>("[data-results]")!; const status = dialog.querySelector<HTMLElement>("[data-client-status]")!; const confirm = dialog.querySelector<HTMLButtonElement>("[data-confirm]")!;
+    const controller = new AbortController(); const { signal } = controller;
     let selected: ClientRow | null = null;
     const search = async (field: "name" | "owl", term: string): Promise<void> => {
       selected = null; confirm.disabled = true;
@@ -306,12 +306,18 @@ class CashRegister {
             const count = await getTicketCount(selected.id); const remaining = Math.max(0, 2 - count); if (this.ticketQuantity() > remaining) throw new Error(`${count}/2 retiré(s) — quota restant insuffisant pour ce panier.`); status.textContent = `${count}/2 retiré(s) — ${remaining} disponible(s).`;
             confirm.disabled = false;
           } catch (error) { status.textContent = error instanceof Error ? error.message : "Contrôle impossible."; }
-        }));
+        }, { signal }));
       } catch (error) { status.textContent = error instanceof Error ? error.message : "Recherche impossible."; }
     };
-    name.addEventListener("input", () => void search("name", name.value.trim())); owl.addEventListener("input", () => { owl.value = owl.value.replace(/\D/g, ""); void search("owl", owl.value); });
-    confirm.addEventListener("click", () => { if (!selected) return; this.ticketClient = selected; this.ticketAuthorized = true; dialog.close(); this.renderBasket(); });
+    name.value = ""; owl.value = ""; results.hidden = true; status.textContent = "Sélectionnez un client."; confirm.disabled = true;
+    name.addEventListener("input", () => void search("name", name.value.trim()), { signal }); owl.addEventListener("input", () => { owl.value = owl.value.replace(/\D/g, ""); void search("owl", owl.value); }, { signal });
     dialog.showModal(); name.focus();
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (authorized: boolean): void => { if (settled) return; settled = true; controller.abort(); resolve(authorized); };
+      confirm.addEventListener("click", () => { if (!selected) return; this.ticketClient = selected; this.ticketAuthorized = true; dialog.close(); this.renderBasket(); finish(true); }, { signal });
+      dialog.addEventListener("close", () => finish(false), { once: true, signal });
+    });
   }
 
   private selectPermitBeneficiary(article: CatalogueRow, position: number, total: number): Promise<PermitWithdrawal | null> {
@@ -342,10 +348,11 @@ class CashRegister {
 
   private async submit(): Promise<void> {
     if (this.submitting) return;
+    if (this.ticketQuantity() && !this.ticketAuthorized && !await this.openTicketDialog()) { this.renderBasket(); return; }
     if (!this.isEmployeePurchase && !await this.ensurePermitBeneficiaries()) { this.renderBasket(); return; }
     this.submitting = true;
     const lines = [...this.basket].map(([article_id, quantite]) => ({ article_id, quantite }));
-    try { const total = this.isEmployeePurchase ? await checkoutEmployee(lines, this.ticketClient?.id ?? null) : await checkout(lines, this.ticketClient?.id ?? null, this.permitWithdrawals); showToast(`${this.isEmployeePurchase ? "Achat employé" : "Vente"} enregistré : ${money.format(total)} PO.`, "success"); this.basket.clear(); this.compassWithSupplement = null; this.ticketClient = null; this.ticketAuthorized = false; this.permitWithdrawals = []; this.catalogue = await getSellableCatalogue(); this.render(); }
+    try { const employeePurchase = this.isEmployeePurchase; const total = employeePurchase ? await checkoutEmployee(lines, this.ticketClient?.id ?? null) : await checkout(lines, this.ticketClient?.id ?? null, this.permitWithdrawals); showToast(`${employeePurchase ? "Achat employé" : "Vente"} enregistré : ${money.format(total)} PO.`, "success"); this.basket.clear(); this.isEmployeePurchase = false; this.compassWithSupplement = null; this.ticketClient = null; this.ticketAuthorized = false; this.permitWithdrawals = []; this.catalogue = await getSellableCatalogue(); this.render(); }
     catch (error) { showToast(error instanceof Error ? error.message : "L’opération a échoué.", "error"); }
     finally { this.submitting = false; }
   }

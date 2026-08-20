@@ -12,6 +12,7 @@
   --color-muted: #615b70;
   --color-brand: #5742a7;
   --color-brand-strong: #44318d;
+  --color-threshold: #5742a7;
   --color-accent: #9b5c20;
   --shadow-panel: 0 18px 45px rgb(57 38 96 / 12%);
   --canvas-decoration: radial-gradient(circle at 82% 8%, rgb(87 66 167 / 10%), transparent 34%), radial-gradient(circle at 12% 92%, rgb(232 163 97 / 9%), transparent 30%);
@@ -27,6 +28,7 @@
   --color-muted: #d1d5db;
   --color-brand: #5742a7;
   --color-brand-strong: #6f5bc4;
+  --color-threshold: #b4a8ff;
   --color-accent: #e8a361;
   --shadow-panel: 0 22px 60px rgb(0 0 0 / 46%), 0 0 32px rgb(87 66 167 / 12%);
   --canvas-decoration: radial-gradient(circle at 82% 8%, rgb(87 66 167 / 28%), transparent 36%), radial-gradient(circle at 8% 88%, rgb(111 91 196 / 15%), transparent 32%);
@@ -41,6 +43,7 @@
   --color-muted: var(--color-muted);
   --color-brand: var(--color-brand);
   --color-brand-strong: var(--color-brand-strong);
+  --color-threshold: var(--color-threshold);
   --color-accent: var(--color-accent);
   --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: Cinzel, Georgia, serif;

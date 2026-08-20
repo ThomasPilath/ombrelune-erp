@@ -20,7 +20,7 @@ export const pages: PageDefinition[] = [
   { id:"clients", title:"Fichier client", description:"Consulter l'annuaire et les hiboux.", href:"/clients", icon:"users", group:"gestion", eyebrow:"Gestion" },
   { id:"pilotage", title:"Pilotage", description:"Consulter et filtrer le journal de l’activité.", href:"/pilotage", icon:"pulse", group:"direction", eyebrow:"Direction" },
   { id:"finances", title:"Finances", description:"Suivre les résultats, périodes et frais.", href:"/finances", icon:"chart", group:"direction", eyebrow:"Direction" },
-  { id:"equipe-rh", title:"Équipe & RH", description:"Gérer l’équipe et consulter les archives individuelles.", href:"/equipe-rh", icon:"badge", group:"direction", eyebrow:"Direction" },
+  { id:"equipe-rh", title:"Paramètres", description:"Gérer les employés et les règles de l’ERP.", href:"/equipe-rh", icon:"badge", group:"direction", eyebrow:"Direction" },
   { id:"offre-stocks", title:"Offre & stocks", description:"Administrer le catalogue, les recettes et les stocks.", href:"/offre-stocks", icon:"boxes", group:"direction", eyebrow:"Direction" }
 ];
 

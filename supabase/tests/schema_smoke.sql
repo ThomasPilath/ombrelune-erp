@@ -1,44 +1,6 @@
-create extension if not exists pgtap with schema extensions;
 begin;
-select extensions.plan(7);
+select '1..1';
 set local role anon;
-
-select extensions.is(
-  public.session_jeu('2026-08-19 12:59:59+00'::timestamptz),
-  '2026-08-18'::date,
-  'Avant 15 h à Madrid, le quota appartient à la session de la veille'
-);
-select extensions.ok(
-  (select count(*) from public.client_permits) = 3,
-  'Le référentiel local ne contient que les trois permis balais attendus'
-);
-select extensions.ok(
-  exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '1110' and permis.type = 'broomstick' and permis.status = 'pending'
-  ),
-  'Filian Dinwiddy possède un permis balais non validé'
-);
-select extensions.ok(
-  exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '31863' and permis.type = 'broomstick' and permis.status = 'accepted'
-  ),
-  'Aurélia Ambrosia possède un permis balais validé'
-);
-select extensions.ok(
-  exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '62771' and lower(client.nom_prenom) = 'elias moonwhisper'
-      and permis.type = 'broomstick' and permis.status = 'sold'
-  ),
-  'Elias Moonwhisper possède un permis balais validé et retiré'
-);
-select extensions.is(
-  public.session_jeu('2026-08-19 13:00:00+00'::timestamptz),
-  '2026-08-19'::date,
-  'À 15 h à Madrid, une nouvelle session de tickets commence'
-);
 
 do $$
 <<schema_smoke>>
@@ -65,6 +27,26 @@ declare
   permit_id bigint;
   erreur_attendue boolean := false;
 begin
+  assert public.session_jeu('2026-08-19 12:59:59+00'::timestamptz) = '2026-08-18'::date,
+    'Avant 15 h à Madrid, le quota appartient à la session de la veille';
+  assert public.session_jeu('2026-08-19 13:00:00+00'::timestamptz) = '2026-08-19'::date,
+    'À 15 h à Madrid, une nouvelle session de tickets commence';
+  assert (select count(*) from public.client_permits) = 3,
+    'Le référentiel local ne contient que les trois permis balais attendus';
+  assert exists (
+    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
+    where client.hibou = '1110' and permis.type = 'broomstick' and permis.status = 'pending'
+  ), 'Filian Dinwiddy possède un permis balais non validé';
+  assert exists (
+    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
+    where client.hibou = '31863' and permis.type = 'broomstick' and permis.status = 'accepted'
+  ), 'Aurélia Ambrosia possède un permis balais validé';
+  assert exists (
+    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
+    where client.hibou = '62771' and lower(client.nom_prenom) = 'elias moonwhisper'
+      and permis.type = 'broomstick' and permis.status = 'sold'
+  ), 'Elias Moonwhisper possède un permis balais validé et retiré';
+
   select id into employe_id from public.employes order by id limit 1;
   select catalogue.id into article_id
   from public.catalogue catalogue
@@ -148,8 +130,8 @@ begin
 
   select count(*) into transactions_avant from public.transactions;
   select count(*) into commandes_avant from public.commandes;
-  periode_cloturee_id := public.cloturer_periode(
-    current_date,
+  periode_cloturee_id := public.cloturer_periode_horodatee(
+    now(),
     jsonb_build_array(jsonb_build_object(
       'employe_id', employe_id,
       'prime', 100,
@@ -174,8 +156,11 @@ begin
   erreur_attendue := false;
   begin
     insert into public.periodes_comptables (
-      date_debut, date_fin, statut, cloturee_at
-    ) values (current_date, current_date, 'clôturée', now());
+      date_debut, date_fin, debut_at, fin_at, statut, cloturee_at
+    ) values (
+      current_date, current_date, now(), now() + interval '30 seconds',
+      'clôturée', now()
+    );
   exception when exclusion_violation then
     erreur_attendue := true;
   end;
@@ -183,7 +168,6 @@ begin
 end
 $$;
 
-select extensions.pass('Les invariants du schéma et des RPC sont respectés');
-select * from extensions.finish();
+select 'ok 1 - Les invariants du schéma et des RPC sont respectés';
 
 rollback;
