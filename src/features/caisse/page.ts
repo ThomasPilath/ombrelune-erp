@@ -1,5 +1,5 @@
 import type { CatalogueRow, ClientRow } from "../../data/schemas";
-import { checkout, checkoutEmployee, getClientPermit, getEmployeeCosts, getSellableCatalogue, getTicketCount, searchClients, type PermitWithdrawal } from "../../data/repositories/pos";
+import { checkout, checkoutEmployee, getClientPermit, getEmployeeCosts, getPreparedOrders, getSellableCatalogue, getTicketCount, searchClients, type BasketLine, type PermitWithdrawal, type PreparedOrder } from "../../data/repositories/pos";
 import { asyncState, bindRetry } from "../../ui/components/async-state";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
@@ -9,8 +9,20 @@ import { compassDecisionLabel, confirmCompassSupplement, isCompass, isCompassSup
 import { confirmGuildCard, isContractBook } from "../guild-card/verification-dialog";
 import { keepFocusInside, lockDocumentScroll } from "../../ui/focus";
 import { withPending } from "../../ui/components/pending";
+import { icon } from "../../ui/icons";
 
 const money = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+const articlePacks = [
+  {
+    id: "newcomer",
+    label: "Pack nouveau",
+    items: [
+      { article: "Baguette", quantity: 1 },
+      { article: "Bloc-notes", quantity: 1 },
+      { article: "Lettres", quantity: 10 }
+    ]
+  }
+] as const;
 const stockOf = (article: CatalogueRow): number => {
   const stock = Array.isArray(article.stocks) ? article.stocks[0] : article.stocks;
   return stock?.quantite ?? 0;
@@ -25,6 +37,7 @@ function clientDialog(id: string, title: string, extra = ""): string {
 
 class CashRegister {
   private catalogue: CatalogueRow[] = [];
+  private preparedOrders: PreparedOrder[] = [];
   private employeeCosts = new Map<string, number>();
   private isEmployeePurchase = false;
   private craftableArticleIds = new Set<string>();
@@ -42,8 +55,9 @@ class CashRegister {
   async mount(): Promise<void> {
     this.outlet.innerHTML = asyncState("loading");
     try {
-      const [catalogue, recipes] = await Promise.all([getSellableCatalogue(), getCraftRecipes()]);
+      const [catalogue, recipes, preparedOrders] = await Promise.all([getSellableCatalogue(), getCraftRecipes(), getPreparedOrders()]);
       this.catalogue = catalogue;
+      this.preparedOrders = preparedOrders;
       this.employeeCosts = await getEmployeeCosts(catalogue.map(article => article.id));
       this.craftableArticleIds = new Set(recipes.map(recipe => String(recipe.produit_id)));
       if (!this.destroyed) this.render();
@@ -69,7 +83,7 @@ class CashRegister {
   private render(): void {
     const articles = this.catalogue.filter(row => !isCompassSupplement(row.article) && row.article.toLocaleLowerCase("fr").includes(this.query.toLocaleLowerCase("fr")));
     this.outlet.innerHTML = `<section class="grid h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)] lg:h-[calc(100dvh-9rem)] lg:min-h-[38rem] lg:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)]">
-      <div id="catalogue-panel" class="flex min-h-0 min-w-0 flex-col lg:border-r"><div class="shrink-0 border-b p-4"><input id="article-search" type="search" value="${escapeHtml(this.query)}" placeholder="Rechercher un article…" aria-label="Rechercher un article" aria-controls="article-list" class="min-h-12 w-full rounded-xl border bg-surface px-4"></div><div id="article-list" class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24 lg:pb-0" aria-live="polite">${articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>'}</div></div>
+      <div id="catalogue-panel" class="flex min-h-0 min-w-0 flex-col lg:border-r"><div class="grid shrink-0 gap-3 border-b p-4 sm:grid-cols-[minmax(0,1fr)_14rem]"><input id="article-search" type="search" value="${escapeHtml(this.query)}" placeholder="Rechercher un article…" aria-label="Rechercher un article" aria-controls="article-list" class="min-h-12 w-full rounded-xl border bg-surface px-4"><label><span class="sr-only">Ajout rapide au panier</span><select id="quick-add-select" class="min-h-12 w-full rounded-xl border bg-surface px-4 font-bold"><option value="">Ajout rapide…</option><optgroup label="Packs">${articlePacks.map(pack => `<option value="pack:${escapeHtml(pack.id)}">${escapeHtml(pack.label)}</option>`).join("")}</optgroup>${this.preparedOrders.length ? `<optgroup label="Commandes préparées">${this.preparedOrders.map(order => `<option value="order:${escapeHtml(order.id)}">${escapeHtml(order.clientName)}</option>`).join("")}</optgroup>` : ""}</select></label></div><div id="article-list" class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24 lg:pb-0" aria-live="polite">${articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>'}</div></div>
       <button id="basket-backdrop" type="button" class="fixed inset-0 z-30 bg-slate-950/60 lg:hidden" aria-label="Fermer le panier"></button>
       <div id="basket-panel" role="dialog" aria-modal="true" aria-labelledby="basket-title" class="fixed inset-x-0 bottom-0 z-40 flex max-h-[78dvh] min-h-0 min-w-0 flex-col rounded-t-2xl border bg-surface shadow-2xl transition-transform duration-200 motion-reduce:transition-none lg:visible lg:pointer-events-auto lg:static lg:z-auto lg:max-h-none lg:min-h-[32rem] lg:translate-y-0 lg:rounded-none lg:border-0 lg:shadow-none"><div class="relative flex shrink-0 flex-wrap items-start justify-between gap-4 border-b p-4 pr-16 lg:pr-4"><div><h2 id="basket-title" class="text-xl font-bold">Panier</h2><p id="basket-summary" class="text-sm text-muted"></p></div><label class="flex min-h-11 items-center gap-3 rounded-xl border px-3 font-bold has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"><input id="employee-purchase" type="checkbox" ${this.isEmployeePurchase ? "checked" : ""} ${this.permitLines().length ? "disabled" : ""} class="size-5 accent-[var(--color-brand)]"><span>Achat employé</span></label><button id="close-basket" type="button" class="absolute right-4 top-4 grid size-11 place-items-center rounded-xl border lg:hidden" aria-label="Fermer le panier">×</button></div><div id="basket-lines" class="min-h-0 flex-1 overflow-y-auto overscroll-contain"></div>
       <div id="basket-actions" class="mt-auto shrink-0 border-t bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"></div></div>
@@ -87,7 +101,7 @@ class CashRegister {
   private basketRow(row: CatalogueRow, quantity: number): string {
     const price = this.unitPrice(row);
     if (isCompassSupplement(row.article)) return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><div><strong>${escapeHtml(row.article)}</strong><p class="mt-1 text-sm text-muted">Ajout automatique — ${escapeHtml(compassDecisionLabel(true))}</p></div><span>${money.format(price)} PO</span></div><div class="mt-3 flex items-center justify-between"><span class="rounded-lg bg-surface-muted px-3 py-2 text-sm font-bold">Quantité liée : ${quantity}</span><strong>${money.format(price * quantity)} PO</strong></div></div>`;
-    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex items-center justify-between"><div class="inline-grid grid-cols-3 overflow-hidden rounded-xl border"><button data-minus class="size-11 font-bold">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
+    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex flex-wrap items-center justify-between gap-3"><div class="inline-grid grid-cols-5 overflow-hidden rounded-xl border"><button data-remove class="grid size-11 place-items-center border-r font-bold text-red-600" aria-label="Retirer ${escapeHtml(row.article)} du panier" title="Retirer du panier">${icon("trash", "size-5")}</button><button data-minus class="size-11 font-bold" aria-label="Retirer une unité">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" aria-label="Ajouter une unité" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+</button><button data-plus-ten class="size-11 border-l text-sm font-bold" aria-label="Ajouter dix unités" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+10</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
   }
 
   private bind(): void {
@@ -98,6 +112,13 @@ class CashRegister {
       list.innerHTML = articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>';
       list.setAttribute("aria-label", `${articles.length} article${articles.length > 1 ? "s" : ""} trouvé${articles.length > 1 ? "s" : ""}`);
       this.bindArticleButtons(list);
+    });
+    this.outlet.querySelector<HTMLSelectElement>("#quick-add-select")!.addEventListener("change", event => {
+      const select = event.currentTarget as HTMLSelectElement;
+      const [kind, id] = select.value.split(":");
+      select.value = "";
+      if (kind === "pack" && id) void this.addPack(id);
+      if (kind === "order" && id) void this.addPreparedOrder(id);
     });
     this.bindArticleButtons(this.outlet);
     this.outlet.querySelector<HTMLInputElement>("#employee-purchase")!.addEventListener("change", event => { this.isEmployeePurchase = (event.currentTarget as HTMLInputElement).checked; this.render(); });
@@ -154,7 +175,7 @@ class CashRegister {
     const quantity = this.basketQuantity();
     this.outlet.querySelector<HTMLElement>("#mobile-basket-count")!.textContent = `Panier (${quantity} article${quantity > 1 ? "s" : ""})`;
     this.outlet.querySelector<HTMLElement>("#mobile-basket-total")!.textContent = `${money.format(this.total())} PO`;
-    this.outlet.querySelectorAll<HTMLElement>("[data-line]").forEach(el => { const id = el.dataset.line!; const minus = el.querySelector<HTMLElement>("[data-minus]"); const plus = el.querySelector<HTMLElement>("[data-plus]"); const quantity = el.querySelector<HTMLInputElement>("[data-quantity]"); minus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 1) - 1)); plus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 1)); quantity?.addEventListener("change", event => this.setQuantity(id, Number((event.currentTarget as HTMLInputElement).value))); });
+    this.outlet.querySelectorAll<HTMLElement>("[data-line]").forEach(el => { const id = el.dataset.line!; const remove = el.querySelector<HTMLElement>("[data-remove]"); const minus = el.querySelector<HTMLElement>("[data-minus]"); const plus = el.querySelector<HTMLElement>("[data-plus]"); const plusTen = el.querySelector<HTMLElement>("[data-plus-ten]"); const quantity = el.querySelector<HTMLInputElement>("[data-quantity]"); remove?.addEventListener("click", () => this.setQuantity(id, 0)); minus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 1) - 1)); plus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 1)); plusTen?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 10)); quantity?.addEventListener("change", event => this.setQuantity(id, Number((event.currentTarget as HTMLInputElement).value))); });
     this.outlet.querySelector("#ticket-action")!.addEventListener("click", () => this.openTicketDialog());
     this.outlet.querySelector("#craft-action")!.addEventListener("click", () => void this.openCraftDialog());
     this.outlet.querySelector<HTMLButtonElement>("#checkout")!.addEventListener("click", event => void withPending(event.currentTarget as HTMLButtonElement, "Validation…", () => this.submit()));
@@ -171,6 +192,52 @@ class CashRegister {
       this.compassWithSupplement = decision;
     }
     this.setQuantity(id, (this.basket.get(id) ?? 0) + 1);
+  }
+  private async addPack(packId: string): Promise<void> {
+    const pack = articlePacks.find(candidate => candidate.id === packId);
+    if (!pack) return;
+    const resolved = pack.items.map(item => ({ item, article: this.catalogue.find(article => article.article.localeCompare(item.article, "fr", { sensitivity: "base" }) === 0) }));
+    const missing = resolved.filter(line => !line.article).map(line => line.item.article);
+    if (missing.length) {
+      showToast(`Pack indisponible : ${missing.join(", ")} absent du catalogue.`, "error");
+      return;
+    }
+    const added = await this.addQuickLines(resolved.map(line => ({ article_id: line.article!.id, quantite: line.item.quantity })), pack.label);
+    if (added) showToast(`${pack.label} ajouté au panier.`, "success");
+  }
+  private async addPreparedOrder(orderId: string): Promise<void> {
+    const order = this.preparedOrders.find(candidate => String(candidate.id) === orderId);
+    if (!order) return;
+    const added = await this.addQuickLines(order.lines, `la commande de ${order.clientName}`);
+    if (added) showToast(`Commande de ${order.clientName} ajoutée au panier.`, "success");
+  }
+  private async addQuickLines(lines: BasketLine[], label: string): Promise<boolean> {
+    const resolved = lines.map(line => ({ line, article: this.article(String(line.article_id)) }));
+    const missing = resolved.filter(item => !item.article).map(item => `#${item.line.article_id}`);
+    if (missing.length) {
+      showToast(`Impossible d’ajouter ${label} : article(s) indisponible(s) ${missing.join(", ")}.`, "error");
+      return false;
+    }
+    const unavailable = resolved.flatMap(item => {
+      const article = item.article!;
+      const requested = (this.basket.get(String(article.id)) ?? 0) + item.line.quantite;
+      return requested > this.maximumQuantity(article) ? [article.article] : [];
+    });
+    if (unavailable.length) {
+      showToast(`Stock insuffisant pour ajouter ${label} : ${unavailable.join(", ")}.`, "error");
+      return false;
+    }
+    for (const { article } of resolved) {
+      if (isContractBook(article!.article) && !this.basket.has(String(article!.id)) && !await confirmGuildCard()) return false;
+      if (isCompass(article!.article) && !this.basket.has(String(article!.id))) {
+        const decision = await confirmCompassSupplement();
+        if (decision === null || this.destroyed) return false;
+        this.compassWithSupplement = decision;
+      }
+    }
+    resolved.forEach(({ line, article }) => this.setQuantity(String(article!.id), (this.basket.get(String(article!.id)) ?? 0) + line.quantite));
+    this.renderBasket();
+    return true;
   }
   private setQuantity(id: string, requested: number): void {
     const row = this.article(id); if (!row) return;

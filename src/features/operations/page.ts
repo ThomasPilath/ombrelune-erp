@@ -12,6 +12,10 @@ import { labelTableControls, responsiveTable } from "../../ui/components/respons
 import { compassDecisionLabel, confirmCompassSupplement, isCompass, isCompassSupplement } from "../compass/supplement-dialog";
 
 const rowSchema = z.record(z.string(), z.unknown());
+const newClientSchema = z.object({
+  name: z.string().trim().min(2).regex(/^[\p{L}\p{M}][\p{L}\p{M}'’ -]*$/u),
+  owl: z.string().trim().regex(/^\d{2,5}$/)
+});
 const money = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 const alphabetically = (left: Record<string, unknown>, right: Record<string, unknown>): number => String(left.article ?? left.nom_prenom ?? "").localeCompare(String(right.article ?? right.nom_prenom ?? ""), "fr", { sensitivity: "base" });
 const table = (headers: string[], rows: string[][]): string => responsiveTable(headers, rows, { cardsOnMobile: true });
@@ -230,8 +234,10 @@ async function renderDirection(outlet: HTMLElement): Promise<void> {
 }
 
 async function renderTreasury(outlet: HTMLElement): Promise<void> {
-  const [current, history] = await Promise.all([rows("tresorerie_courante"), rows("registre_tresorerie")]); const theoretical = Number(current[0]?.montant_theorique ?? 0);
-  outlet.innerHTML = `${panel("Trésorerie actuelle", `<div class="p-5"><p class="text-sm text-muted">Montant théorique</p><p class="mt-1 text-3xl font-black">${money.format(theoretical)} PO</p><form id="treasury-form" class="mt-6 grid gap-4 sm:grid-cols-[12rem_1fr_auto]"><label class="text-sm font-bold">Montant constaté<input name="amount" type="number" value="${theoretical}" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><label class="text-sm font-bold">Note<input name="notes" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><button class="mt-auto min-h-11 rounded-xl bg-brand px-5 font-bold text-white">Enregistrer</button></form></div>`)}<div class="mt-5">${panel("Contrôles précédents", table(["Date", "Théorique", "Constaté", "Écart", "Note"], history.slice().reverse().map(r => [new Date(String(r.created_at)).toLocaleString("fr-FR"), money.format(Number(r.treso_theorique)), money.format(Number(r.montant_saisi)), money.format(Number(r.ecart)), escapeHtml(r.notes)])))}</div>`;
+  const [current, historyRows] = await Promise.all([rows("tresorerie_courante"), rows("registre_tresorerie", "*,employes(nom_prenom)")]);
+  const theoretical = Number(current[0]?.montant_theorique ?? 0);
+  const history = historyRows.sort((left, right) => new Date(String(right.created_at)).getTime() - new Date(String(left.created_at)).getTime());
+  outlet.innerHTML = `${panel("Trésorerie actuelle", `<div class="p-5"><p class="text-sm text-muted">Montant théorique</p><p class="mt-1 text-3xl font-black">${money.format(theoretical)} PO</p><form id="treasury-form" class="mt-6 grid gap-4 sm:grid-cols-[12rem_1fr_auto]"><label class="text-sm font-bold">Montant constaté<input name="amount" type="number" value="${theoretical}" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><label class="text-sm font-bold">Note<input name="notes" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><button class="mt-auto min-h-11 rounded-xl bg-brand px-5 font-bold text-white">Enregistrer</button></form></div>`)}<div class="mt-5">${panel("Contrôles précédents", table(["Date et heure", "Employé", "Théorique", "Constaté", "Écart", "Note"], history.map(record => { const employee = record.employes as Record<string, unknown> | null; return [new Date(String(record.created_at)).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }), escapeHtml(employee?.nom_prenom ?? "Employé inconnu"), money.format(Number(record.treso_theorique)), money.format(Number(record.montant_saisi)), money.format(Number(record.ecart)), escapeHtml(record.notes)]; })))}</div>`;
   outlet.querySelector<HTMLFormElement>("#treasury-form")!.addEventListener("submit", async event => { event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement); try { await callRpc("enregistrer_controle_tresorerie", { p_employe_id: sessionId(), p_montant_saisi: Number(data.get("amount")), p_notes: data.get("notes") }, z.coerce.number()); showToast("Contrôle enregistré.", "success"); await renderTreasury(outlet); } catch (e) { showToast(e instanceof Error ? e.message : "Contrôle impossible", "error"); } });
 }
 
@@ -239,7 +245,7 @@ async function renderSimple(outlet: HTMLElement, pageId: string): Promise<void> 
   if (pageId === "clients") {
     const data = (await rows("clients_actifs")).sort(alphabetically);
     const normalize = (value: unknown): string => String(value ?? "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("fr");
-    outlet.innerHTML = `${panel("Nouveau client", '<form id="client-form" class="grid gap-3 p-5 sm:grid-cols-[1fr_14rem_auto]"><label class="text-sm font-bold">Nom et prénom<input name="name" required class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><label class="text-sm font-bold">Hibou<input name="owl" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><button class="mt-auto min-h-11 rounded-xl bg-brand px-5 font-bold text-white">Ajouter</button></form>')}<div class="mt-5">${panel("Fichier client", '<div class="border-b p-4"><input id="client-search" type="search" placeholder="Rechercher par nom ou hibou…" class="min-h-11 w-full rounded-xl border bg-surface px-4" aria-label="Rechercher un client"></div><div id="client-list"></div>')}</div>`;
+    outlet.innerHTML = `${panel("Nouveau client", '<form id="client-form" class="grid gap-3 p-5 sm:grid-cols-[1fr_14rem_auto]"><label class="text-sm font-bold">Nom et prénom<input name="name" type="text" required minlength="2" autocomplete="name" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><label class="text-sm font-bold">Hibou<input name="owl" type="text" required inputmode="numeric" pattern="[0-9]{2,5}" minlength="2" maxlength="5" autocomplete="off" aria-describedby="client-owl-help" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"><span id="client-owl-help" class="mt-1 block text-xs font-normal text-muted">Entre 2 et 5 chiffres.</span></label><button type="button" data-add-client class="mt-auto min-h-11 rounded-xl bg-brand px-5 font-bold text-white">Ajouter</button></form>')}<div class="mt-5">${panel("Fichier client", '<div class="border-b p-4"><input id="client-search" type="search" placeholder="Rechercher par nom ou hibou…" class="min-h-11 w-full rounded-xl border bg-surface px-4" aria-label="Rechercher un client"></div><div id="client-list"></div>')}</div>`;
     const list = outlet.querySelector<HTMLElement>("#client-list")!; const search = outlet.querySelector<HTMLInputElement>("#client-search")!;
     const openClientEditor = (client: Record<string, unknown>): void => {
       const dialog = document.createElement("dialog"); dialog.className = "m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
@@ -255,7 +261,41 @@ async function renderSimple(outlet: HTMLElement, pageId: string): Promise<void> 
     };
     const drawClients = (): void => { const term = normalize(search.value.trim()); const filtered = data.filter(client => !term || normalize(client.nom_prenom).includes(term) || normalize(client.hibou).includes(term)); list.innerHTML = table(["Nom et prénom", "Hibou", "Actions"], filtered.map(r => [escapeHtml(r.nom_prenom), escapeHtml(r.hibou ?? "—"), `<div class="flex justify-end gap-2"><button data-edit-client="${escapeHtml(r.id)}" class="grid size-10 place-items-center rounded-lg border text-brand" aria-label="Modifier ${escapeHtml(r.nom_prenom)}" title="Modifier">${icon("edit", "size-5")}</button><button data-archive-client="${escapeHtml(r.id)}" class="grid size-10 place-items-center rounded-lg border text-red-600" aria-label="Archiver ${escapeHtml(r.nom_prenom)}" title="Archiver">${icon("archive", "size-5")}</button></div>`])); list.querySelectorAll<HTMLButtonElement>("[data-edit-client]").forEach(button => button.addEventListener("click", () => openClientEditor(data.find(client => String(client.id) === button.dataset.editClient)!))); list.querySelectorAll<HTMLButtonElement>("[data-archive-client]").forEach(button => button.addEventListener("click", () => openArchiveDialog(data.find(client => String(client.id) === button.dataset.archiveClient)!))); };
     search.addEventListener("input", drawClients); drawClients();
-    outlet.querySelector<HTMLFormElement>("#client-form")!.addEventListener("submit", async event => { event.preventDefault(); const form = new FormData(event.currentTarget as HTMLFormElement); try { await callRpc("creer_client", { p_nom_prenom: String(form.get("name")), p_hibou: String(form.get("owl")), p_employe_id: sessionId() }, z.coerce.number()); showToast("Client ajouté et action journalisée.", "success"); await renderSimple(outlet, pageId); } catch (error) { showToast(error instanceof Error ? error.message : "Création impossible.", "error"); } });
+    const clientForm = outlet.querySelector<HTMLFormElement>("#client-form")!;
+    clientForm.addEventListener("submit", event => event.preventDefault());
+    clientForm.querySelector<HTMLButtonElement>("[data-add-client]")!.addEventListener("click", () => {
+      const nameInput = clientForm.elements.namedItem("name") as HTMLInputElement;
+      const owlInput = clientForm.elements.namedItem("owl") as HTMLInputElement;
+      nameInput.setCustomValidity(""); owlInput.setCustomValidity("");
+      const parsed = newClientSchema.safeParse({ name: nameInput.value, owl: owlInput.value });
+      if (!parsed.success) {
+        const invalidFields = new Set(parsed.error.issues.map(issue => issue.path[0]));
+        if (invalidFields.has("name")) nameInput.setCustomValidity("Saisissez un nom et un prénom en lettres (2 caractères minimum).");
+        if (invalidFields.has("owl")) owlInput.setCustomValidity("Saisissez un hibou composé de 2 à 5 chiffres.");
+        clientForm.reportValidity();
+        return;
+      }
+
+      const dialog = document.createElement("dialog");
+      dialog.className = "m-auto w-[min(32rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
+      dialog.innerHTML = `<div class="border-b p-5"><h2 class="text-xl font-bold">Confirmer le nouveau client</h2><p class="mt-2 text-sm text-muted">Vérifiez les informations avant de créer le client.</p></div><dl class="grid gap-4 p-5 sm:grid-cols-2"><div><dt class="text-sm font-bold text-muted">Nom et prénom</dt><dd class="mt-1 font-bold">${escapeHtml(parsed.data.name)}</dd></div><div><dt class="text-sm font-bold text-muted">Hibou</dt><dd class="mt-1 font-bold">${escapeHtml(parsed.data.owl)}</dd></div></dl><div class="flex justify-end gap-3 border-t p-4"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler</button><button type="button" data-confirm class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Valider et ajouter</button></div>`;
+      document.body.append(dialog);
+      const close = (): void => { dialog.close(); dialog.remove(); };
+      dialog.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", close);
+      dialog.addEventListener("cancel", event => { event.preventDefault(); close(); }, { once: true });
+      dialog.querySelector<HTMLButtonElement>("[data-confirm]")!.addEventListener("click", async event => {
+        const confirmButton = event.currentTarget as HTMLButtonElement;
+        confirmButton.disabled = true;
+        try {
+          await callRpc("creer_client", { p_nom_prenom: parsed.data.name, p_hibou: parsed.data.owl, p_employe_id: sessionId() }, z.coerce.number());
+          close(); showToast("Client ajouté et action journalisée.", "success"); await renderSimple(outlet, pageId);
+        } catch (error) {
+          confirmButton.disabled = false;
+          showToast(error instanceof Error ? error.message : "Création impossible.", "error");
+        }
+      });
+      dialog.showModal();
+    });
   }
 }
 

@@ -5,6 +5,21 @@ import { callRpc, getSupabaseClient } from "../supabase";
 
 export interface BasketLine { article_id: string | number; quantite: number }
 export interface PermitWithdrawal { article_id: string | number; permit_id: string | number }
+export interface PreparedOrder {
+  id: string | number;
+  clientName: string;
+  lines: BasketLine[];
+}
+
+const preparedOrderSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  client_nom: z.string().nullable(),
+  clients: z.object({ nom_prenom: z.string() }).nullable(),
+  lignes_commandes: z.array(z.object({
+    article_id: z.union([z.string(), z.number()]),
+    quantite: z.coerce.number().int().positive()
+  }))
+});
 
 export async function getEmployeeCosts(articleIds: CatalogueRow["id"][]): Promise<Map<string, number>> {
   const entries = await Promise.all(articleIds.map(async articleId => {
@@ -26,6 +41,20 @@ export async function getSellableCatalogue(): Promise<CatalogueRow[]> {
     .order("article");
   if (error) throw new Error(error.message);
   return z.array(catalogueRowSchema).parse(data);
+}
+
+export async function getPreparedOrders(): Promise<PreparedOrder[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("commandes")
+    .select("id,client_nom,clients(nom_prenom),lignes_commandes(article_id,quantite)")
+    .eq("statut_livraison", "Prêt")
+    .order("date_pret", { ascending: true });
+  if (error) throw new Error(error.message);
+  return z.array(preparedOrderSchema).parse(data).map(order => ({
+    id: order.id,
+    clientName: order.clients?.nom_prenom ?? order.client_nom ?? "Client inconnu",
+    lines: order.lignes_commandes
+  }));
 }
 
 export async function searchClients(term: string, field: "name" | "owl"): Promise<ClientRow[]> {
