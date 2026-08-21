@@ -7,11 +7,11 @@ interface ResponsiveTableOptions {
 
 export function responsiveTable(headers: string[], rows: string[][], options: ResponsiveTableOptions = {}): string {
   if (!rows.length) return `<p class="p-8 text-center text-muted">${escapeHtml(options.emptyMessage ?? "Aucune donnée.")}</p>`;
-  const head = headers.map(header => `<th scope="col" class="px-4 py-3">${escapeHtml(header)}</th>`).join("");
-  const body = rows.map(row => `<tr class="border-t">${row.map(cell => `<td class="px-4 py-3 align-top">${cell}</td>`).join("")}</tr>`).join("");
+  const head = headers.map(header => `<th scope="col" class="px-4 py-2.5">${escapeHtml(header)}</th>`).join("");
+  const body = rows.map(row => `<tr class="border-t">${row.map(cell => `<td class="px-4 py-1.5 align-middle">${cell}</td>`).join("")}</tr>`).join("");
   const desktop = `<div class="overflow-x-auto"><table class="w-full text-left text-sm"><thead class="bg-surface-muted"><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   if (!options.cardsOnMobile) return desktop;
-  const cards = rows.map(row => `<dl class="overflow-hidden rounded-xl border bg-surface-muted">${row.map((cell, index) => `<div class="grid grid-cols-[minmax(6.5rem,38%)_minmax(0,1fr)] gap-3 border-b px-3 py-3 last:border-b-0"><dt class="text-xs font-bold text-muted">${escapeHtml(headers[index] ?? "")}</dt><dd class="min-w-0 break-words text-right text-sm">${cell}</dd></div>`).join("")}</dl>`).join("");
+  const cards = rows.map(row => `<dl class="overflow-hidden rounded-xl border bg-surface-muted">${row.map((cell, index) => `<div class="grid grid-cols-[minmax(6.5rem,38%)_minmax(0,1fr)] gap-3 border-b px-3 py-2 last:border-b-0"><dt class="text-xs font-bold text-muted">${escapeHtml(headers[index] ?? "")}</dt><dd class="min-w-0 break-words text-right text-sm">${cell}</dd></div>`).join("")}</dl>`).join("");
   return `<div class="grid gap-3 p-3 md:hidden">${cards}</div><div class="hidden md:block">${desktop}</div>`;
 }
 

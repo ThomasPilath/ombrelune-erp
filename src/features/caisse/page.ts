@@ -3,15 +3,19 @@ import { checkout, checkoutEmployee, getClientPermit, getEmployeeCosts, getPrepa
 import { asyncState, bindRetry } from "../../ui/components/async-state";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
-import { getCraftRecipes } from "../../data/repositories/craft";
+import { getCraftRecipes, ingredientStock, type RecipeRow } from "../../data/repositories/craft";
 import { CraftPlanner, type CraftSelection } from "../craft/planner";
 import { compassDecisionLabel, confirmCompassSupplement, isCompass, isCompassSupplement } from "../compass/supplement-dialog";
 import { confirmGuildCard, isContractBook } from "../guild-card/verification-dialog";
 import { keepFocusInside, lockDocumentScroll } from "../../ui/focus";
 import { withPending } from "../../ui/components/pending";
 import { icon } from "../../ui/icons";
+import { buttonClasses, fieldClasses, iconButtonClasses } from "../../ui/components/primitives";
 
 const money = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+const field = fieldClasses();
+const primaryButton = buttonClasses();
+const secondaryIconButton = iconButtonClasses("secondary");
 const articlePacks = [
   {
     id: "newcomer",
@@ -29,10 +33,10 @@ const stockOf = (article: CatalogueRow): number => {
 };
 
 function clientDialog(id: string, title: string, extra = ""): string {
-  return `<dialog id="${id}" class="m-auto w-[min(36rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/60">
-    <div class="border-b p-5"><div class="flex justify-between gap-4"><div><h2 class="text-xl font-bold">${title}</h2><p class="mt-1 text-sm text-muted">Recherchez puis sélectionnez la personne.</p></div><button type="button" data-close class="grid size-11 place-items-center rounded-xl border" aria-label="Fermer">×</button></div></div>
-    <div class="space-y-4 p-5">${extra}<div class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-bold">Nom et prénom<input data-client-name class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3" autocomplete="off"></label><label class="text-sm font-bold">Hibou<input data-client-owl inputmode="numeric" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3" autocomplete="off"></label></div><div data-results class="max-h-52 overflow-y-auto rounded-xl border" hidden></div><div data-client-status class="rounded-xl bg-surface-muted p-4 text-sm text-muted">Sélectionnez un client.</div></div>
-    <div class="flex justify-end border-t p-4"><button type="button" data-confirm disabled class="min-h-11 rounded-xl bg-brand px-5 font-bold text-white disabled:opacity-40">Confirmer</button></div></dialog>`;
+  return `<dialog id="${id}" class="m-auto w-[min(36rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop">
+    <div class="border-b p-5"><div class="flex justify-between gap-4"><div><h2 class="text-xl font-bold">${title}</h2><p class="mt-1 text-sm text-muted">Recherchez puis sélectionnez la personne.</p></div><button type="button" data-close class="${secondaryIconButton}" aria-label="Fermer">×</button></div></div>
+    <div class="space-y-4 p-5">${extra}<div class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-bold">Nom et prénom<input data-client-name class="mt-2 ${field}" autocomplete="off"></label><label class="text-sm font-bold">Hibou<input data-client-owl inputmode="numeric" class="mt-2 ${field}" autocomplete="off"></label></div><div data-results class="max-h-52 overflow-y-auto rounded-xl border" hidden></div><div data-client-status class="rounded-xl bg-surface-muted p-4 text-sm text-muted">Sélectionnez un client.</div></div>
+    <div class="flex justify-end border-t p-4"><button type="button" data-confirm disabled class="${primaryButton}">Confirmer</button></div></dialog>`;
 }
 
 class CashRegister {
@@ -40,7 +44,7 @@ class CashRegister {
   private preparedOrders: PreparedOrder[] = [];
   private employeeCosts = new Map<string, number>();
   private isEmployeePurchase = false;
-  private craftableArticleIds = new Set<string>();
+  private craftableQuantities = new Map<string, number>();
   private basket = new Map<string, number>();
   private basketOpen = false;
   private query = "";
@@ -59,7 +63,7 @@ class CashRegister {
       this.catalogue = catalogue;
       this.preparedOrders = preparedOrders;
       this.employeeCosts = await getEmployeeCosts(catalogue.map(article => article.id));
-      this.craftableArticleIds = new Set(recipes.map(recipe => String(recipe.produit_id)));
+      this.updateCraftability(recipes);
       if (!this.destroyed) this.render();
     }
     catch (error) { this.outlet.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined, "Réessayer"); bindRetry(this.outlet, () => void this.mount()); }
@@ -73,21 +77,46 @@ class CashRegister {
   private basketQuantity(): number { return [...this.basket.values()].reduce((sum, quantity) => sum + quantity, 0); }
   private canCheckout(): boolean { return this.basket.size > 0; }
   private assignedPermits(articleId: string): number { return this.permitWithdrawals.filter(item => String(item.article_id) === articleId).length; }
+  private updateCraftability(recipes: RecipeRow[]): void {
+    this.craftableQuantities.clear();
+    const byProduct = new Map<string, RecipeRow[]>();
+    recipes.forEach(recipe => {
+      const productId = String(recipe.produit_id);
+      byProduct.set(productId, [...(byProduct.get(productId) ?? []), recipe]);
+    });
+    byProduct.forEach((lines, productId) => {
+      const possibleCrafts = Math.min(...lines.map(line => Math.floor(ingredientStock(line) / line.quantite_requise)));
+      this.craftableQuantities.set(productId, possibleCrafts * lines[0]!.quantite_produite);
+    });
+  }
   private shortages(): Array<[CatalogueRow, number]> { return [...this.basket].map(([id, quantity]) => [this.article(id)!, Math.max(0, quantity - stockOf(this.article(id)!))] as [CatalogueRow, number]).filter(([article, shortage]) => !isCompassSupplement(article.article) && shortage > 0); }
   private maximumQuantity(row: CatalogueRow): number {
     if (row.type_article === "ticket") return Math.min(2, stockOf(row));
-    if (row.type_article === "document_permis") return this.craftableArticleIds.has(String(row.id)) ? 1 : Math.min(1, stockOf(row));
-    return this.craftableArticleIds.has(String(row.id)) ? Number.MAX_SAFE_INTEGER : stockOf(row);
+    if (row.type_article === "document_permis") return Math.min(1, stockOf(row) + (this.craftableQuantities.get(String(row.id)) ?? 0));
+    return stockOf(row) + (this.craftableQuantities.get(String(row.id)) ?? 0);
+  }
+  private remainingCraftableQuantity(row: CatalogueRow): number {
+    const reservedForCraft = Math.max(0, (this.basket.get(String(row.id)) ?? 0) - stockOf(row));
+    return Math.max(0, (this.craftableQuantities.get(String(row.id)) ?? 0) - reservedForCraft);
+  }
+
+  private renderArticleList(): void {
+    const list = this.outlet.querySelector<HTMLElement>("#article-list");
+    if (!list) return;
+    const articles = this.catalogue.filter(row => !isCompassSupplement(row.article) && row.article.toLocaleLowerCase("fr").includes(this.query.toLocaleLowerCase("fr")));
+    list.innerHTML = articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>';
+    list.setAttribute("aria-label", `${articles.length} article${articles.length > 1 ? "s" : ""} trouvé${articles.length > 1 ? "s" : ""}`);
+    this.bindArticleButtons(list);
   }
 
   private render(): void {
     const articles = this.catalogue.filter(row => !isCompassSupplement(row.article) && row.article.toLocaleLowerCase("fr").includes(this.query.toLocaleLowerCase("fr")));
     this.outlet.innerHTML = `<section class="grid h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)] lg:h-[calc(100dvh-9rem)] lg:min-h-[38rem] lg:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)]">
       <div id="catalogue-panel" class="flex min-h-0 min-w-0 flex-col lg:border-r"><div class="grid shrink-0 gap-3 border-b p-4 sm:grid-cols-[minmax(0,1fr)_14rem]"><input id="article-search" type="search" value="${escapeHtml(this.query)}" placeholder="Rechercher un article…" aria-label="Rechercher un article" aria-controls="article-list" class="min-h-12 w-full rounded-xl border bg-surface px-4"><label><span class="sr-only">Ajout rapide au panier</span><select id="quick-add-select" class="min-h-12 w-full rounded-xl border bg-surface px-4 font-bold"><option value="">Ajout rapide…</option><optgroup label="Packs">${articlePacks.map(pack => `<option value="pack:${escapeHtml(pack.id)}">${escapeHtml(pack.label)}</option>`).join("")}</optgroup>${this.preparedOrders.length ? `<optgroup label="Commandes préparées">${this.preparedOrders.map(order => `<option value="order:${escapeHtml(order.id)}">${escapeHtml(order.clientName)}</option>`).join("")}</optgroup>` : ""}</select></label></div><div id="article-list" class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24 lg:pb-0" aria-live="polite">${articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>'}</div></div>
-      <button id="basket-backdrop" type="button" class="fixed inset-0 z-30 bg-slate-950/60 lg:hidden" aria-label="Fermer le panier"></button>
+      <button id="basket-backdrop" type="button" class="fixed inset-0 z-30 bg-backdrop lg:hidden" aria-label="Fermer le panier"></button>
       <div id="basket-panel" role="dialog" aria-modal="true" aria-labelledby="basket-title" class="fixed inset-x-0 bottom-0 z-40 flex max-h-[78dvh] min-h-0 min-w-0 flex-col rounded-t-2xl border bg-surface shadow-2xl transition-transform duration-200 motion-reduce:transition-none lg:visible lg:pointer-events-auto lg:static lg:z-auto lg:max-h-none lg:min-h-[32rem] lg:translate-y-0 lg:rounded-none lg:border-0 lg:shadow-none"><div class="relative flex shrink-0 flex-wrap items-start justify-between gap-4 border-b p-4 pr-16 lg:pr-4"><div><h2 id="basket-title" class="text-xl font-bold">Panier</h2><p id="basket-summary" class="text-sm text-muted"></p></div><label class="flex min-h-11 items-center gap-3 rounded-xl border px-3 font-bold has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"><input id="employee-purchase" type="checkbox" ${this.isEmployeePurchase ? "checked" : ""} ${this.permitLines().length ? "disabled" : ""} class="size-5 accent-[var(--color-brand)]"><span>Achat employé</span></label><button id="close-basket" type="button" class="absolute right-4 top-4 grid size-11 place-items-center rounded-xl border lg:hidden" aria-label="Fermer le panier">×</button></div><div id="basket-lines" class="min-h-0 flex-1 overflow-y-auto overscroll-contain"></div>
       <div id="basket-actions" class="mt-auto shrink-0 border-t bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"></div></div>
-    </section>${clientDialog("ticket-dialog", "Bénéficiaire des tickets")}<dialog id="craft-dialog" class="m-auto max-h-[calc(100%-2rem)] w-[min(48rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/60"><div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-surface p-5"><div><h2 class="text-xl font-bold">Fabrications nécessaires</h2><p class="mt-1 text-sm text-muted">Fabriquez les articles manquants avant de valider le panier.</p></div><button type="button" data-close class="grid size-11 place-items-center rounded-xl border" aria-label="Fermer">×</button></div><div id="cash-craft-planner" class="p-5"></div></dialog>`;
+    </section>${clientDialog("ticket-dialog", "Bénéficiaire des tickets")}<dialog id="craft-dialog" class="m-auto max-h-[calc(100%-2rem)] w-[min(48rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop"><div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-surface p-5"><div><h2 class="text-xl font-bold">Fabrications nécessaires</h2><p class="mt-1 text-sm text-muted">Fabriquez les articles manquants avant de valider le panier.</p></div><button type="button" data-close class="grid size-11 place-items-center rounded-xl border" aria-label="Fermer">×</button></div><div id="cash-craft-planner" class="p-5"></div></dialog>`;
     this.outlet.insertAdjacentHTML("beforeend", `<button id="open-basket" type="button" class="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-20 flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-brand px-5 font-bold text-white shadow-xl lg:hidden" aria-controls="basket-panel"><span id="mobile-basket-count"></span><span id="mobile-basket-total"></span></button>`);
     this.bind();
     this.renderBasket();
@@ -96,22 +125,20 @@ class CashRegister {
 
   private articleRow(row: CatalogueRow): string {
     const stock = stockOf(row);
-    return `<button data-add="${escapeHtml(row.id)}" ${!stock && !this.craftableArticleIds.has(String(row.id)) ? "disabled" : ""} class="grid min-h-16 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b px-4 py-3 text-left hover:bg-surface-muted disabled:opacity-45 sm:grid-cols-[minmax(0,1fr)_8rem_9rem] sm:gap-x-6"><strong class="truncate">${escapeHtml(row.article)}</strong><span class="row-start-2 text-right text-sm text-muted sm:row-start-auto">${stock ? `Stock : ${stock}` : "Rupture"}</span><span class="row-span-2 text-right font-bold sm:row-span-1">${money.format(this.unitPrice(row))} PO${this.isEmployeePurchase ? '<small class="block font-normal text-muted">prix coûtant</small>' : ""}</span></button>`;
+    const craftableNow = this.remainingCraftableQuantity(row) > 0;
+    const unavailable = (this.basket.get(String(row.id)) ?? 0) >= this.maximumQuantity(row);
+    return `<button data-add="${escapeHtml(row.id)}" ${unavailable ? "disabled" : ""} class="grid min-h-12 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b px-4 py-2 text-left hover:bg-surface-muted disabled:opacity-45 sm:grid-cols-[minmax(0,1fr)_8rem_9rem] sm:gap-x-6 ${!stock && craftableNow ? "border-l-2 border-l-accent bg-accent/5" : ""}"><strong class="truncate">${escapeHtml(row.article)}</strong><span class="row-start-2 text-right text-sm ${!stock && craftableNow ? "font-bold text-accent" : "text-muted"} sm:row-start-auto">${stock ? `Stock : ${stock}` : "Rupture"}</span><span class="row-span-2 text-right font-bold sm:row-span-1">${money.format(this.unitPrice(row))} PO${this.isEmployeePurchase ? '<small class="block font-normal text-muted">prix coûtant</small>' : ""}</span></button>`;
   }
   private basketRow(row: CatalogueRow, quantity: number): string {
     const price = this.unitPrice(row);
     if (isCompassSupplement(row.article)) return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><div><strong>${escapeHtml(row.article)}</strong><p class="mt-1 text-sm text-muted">Ajout automatique — ${escapeHtml(compassDecisionLabel(true))}</p></div><span>${money.format(price)} PO</span></div><div class="mt-3 flex items-center justify-between"><span class="rounded-lg bg-surface-muted px-3 py-2 text-sm font-bold">Quantité liée : ${quantity}</span><strong>${money.format(price * quantity)} PO</strong></div></div>`;
-    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex flex-wrap items-center justify-between gap-3"><div class="inline-grid grid-cols-5 overflow-hidden rounded-xl border"><button data-remove class="grid size-11 place-items-center border-r font-bold text-red-600" aria-label="Retirer ${escapeHtml(row.article)} du panier" title="Retirer du panier">${icon("trash", "size-5")}</button><button data-minus class="size-11 font-bold" aria-label="Retirer une unité">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" aria-label="Ajouter une unité" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+</button><button data-plus-ten class="size-11 border-l text-sm font-bold" aria-label="Ajouter dix unités" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+10</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
+    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex flex-wrap items-center justify-between gap-3"><div class="inline-grid grid-cols-5 overflow-hidden rounded-xl border"><button data-remove class="grid size-11 place-items-center border-r font-bold text-danger" aria-label="Retirer ${escapeHtml(row.article)} du panier" title="Retirer du panier">${icon("trash", "size-5")}</button><button data-minus class="size-11 font-bold" aria-label="Retirer une unité">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" aria-label="Ajouter une unité" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+</button><button data-plus-ten class="size-11 border-l text-sm font-bold" aria-label="Ajouter dix unités" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+10</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-warning">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
   }
 
   private bind(): void {
     this.outlet.querySelector<HTMLInputElement>("#article-search")!.addEventListener("input", event => {
       this.query = (event.currentTarget as HTMLInputElement).value;
-      const articles = this.catalogue.filter(row => !isCompassSupplement(row.article) && row.article.toLocaleLowerCase("fr").includes(this.query.toLocaleLowerCase("fr")));
-      const list = this.outlet.querySelector<HTMLElement>("#article-list")!;
-      list.innerHTML = articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>';
-      list.setAttribute("aria-label", `${articles.length} article${articles.length > 1 ? "s" : ""} trouvé${articles.length > 1 ? "s" : ""}`);
-      this.bindArticleButtons(list);
+      this.renderArticleList();
     });
     this.outlet.querySelector<HTMLSelectElement>("#quick-add-select")!.addEventListener("change", event => {
       const select = event.currentTarget as HTMLSelectElement;
@@ -171,7 +198,7 @@ class CashRegister {
     if (!summary || !lines || !actions) return;
     summary.textContent = this.basket.size ? `${this.basket.size} article(s) distinct(s)` : "Ajoutez un article depuis la liste.";
     lines.innerHTML = this.basket.size ? [...this.basket].map(([id, q]) => this.basketRow(this.article(id)!, q)).join("") : '<p class="p-8 text-center text-muted">Le panier est vide.</p>';
-    actions.innerHTML = `<div class="mb-4 flex items-baseline justify-between"><strong>${this.isEmployeePurchase ? "Total à rembourser" : "Total"}</strong><strong class="text-2xl">${money.format(this.total())} PO</strong></div>${this.ticketQuantity() ? `<p class="mb-3 text-sm text-muted">${this.ticketAuthorized ? `Bénéficiaire des tickets : ${escapeHtml(this.ticketClient?.nom_prenom ?? "vérifié")}.` : "Le bénéficiaire des tickets sera vérifié lors de la validation."}</p>` : ""}<div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><button id="craft-action" ${this.shortages().length ? "" : "disabled"} class="min-h-12 rounded-xl border border-brand font-bold text-brand disabled:opacity-40">Craft</button><button id="checkout" ${this.canCheckout() && !this.shortages().length && !this.submitting ? "" : "disabled"} class="min-h-12 rounded-xl bg-brand font-bold text-white disabled:opacity-40">${this.isEmployeePurchase ? "Valider l’achat" : "Valider"}</button></div>`;
+    actions.innerHTML = `<div class="mb-4 flex items-baseline justify-between"><strong>${this.isEmployeePurchase ? "Total à rembourser" : "Total"}</strong><strong class="text-2xl">${money.format(this.total())} PO</strong></div>${this.ticketQuantity() ? `<p class="mb-3 text-sm text-muted">${this.ticketAuthorized ? `Bénéficiaire des tickets : ${escapeHtml(this.ticketClient?.nom_prenom ?? "vérifié")}.` : "Le bénéficiaire des tickets sera vérifié lors de la validation."}</p>` : ""}<div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><button id="craft-action" ${this.shortages().length ? "" : "disabled"} class="min-h-12 rounded-xl border border-accent font-bold text-accent disabled:opacity-40">Craft</button><button id="checkout" ${this.canCheckout() && !this.shortages().length && !this.submitting ? "" : "disabled"} class="min-h-12 rounded-xl bg-brand font-bold text-white disabled:opacity-40">${this.isEmployeePurchase ? "Valider l’achat" : "Valider"}</button></div>`;
     const quantity = this.basketQuantity();
     this.outlet.querySelector<HTMLElement>("#mobile-basket-count")!.textContent = `Panier (${quantity} article${quantity > 1 ? "s" : ""})`;
     this.outlet.querySelector<HTMLElement>("#mobile-basket-total")!.textContent = `${money.format(this.total())} PO`;
@@ -260,7 +287,7 @@ class CashRegister {
     }
     if (row.type_article === "ticket") { this.ticketClient = null; this.ticketAuthorized = false; }
     if (row.type_article === "document_permis") this.render();
-    else this.renderBasket();
+    else { this.renderArticleList(); this.renderBasket(); }
   }
 
   private async openCraftDialog(): Promise<void> {
@@ -281,7 +308,11 @@ class CashRegister {
       const planner = new CraftPlanner(root, {
         initial,
         allowAdd: false,
-        onCrafted: async () => { this.catalogue = await getSellableCatalogue(); },
+        onCrafted: async () => {
+          const [catalogue, refreshedRecipes] = await Promise.all([getSellableCatalogue(), getCraftRecipes()]);
+          this.catalogue = catalogue;
+          this.updateCraftability(refreshedRecipes);
+        },
         onComplete: () => dialog.close()
       });
       await planner.mount();
@@ -322,7 +353,7 @@ class CashRegister {
 
   private selectPermitBeneficiary(article: CatalogueRow, position: number, total: number): Promise<PermitWithdrawal | null> {
     const dialog = document.createElement("dialog");
-    dialog.className = "m-auto w-[min(36rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
+    dialog.className = "m-auto w-[min(36rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop";
     dialog.innerHTML = `<div class="border-b p-5"><h2 class="text-xl font-bold">Vérifier le permis</h2><p class="mt-1 text-sm text-muted">${escapeHtml(article.article)} — permis ${position}/${total}</p></div><div class="space-y-4 p-5"><div class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-bold">Nom et prénom<input data-name autocomplete="off" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label><label class="text-sm font-bold">Hibou<input data-owl autocomplete="off" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label></div><div data-results class="max-h-52 overflow-y-auto rounded-xl border" hidden></div><p data-status class="rounded-xl bg-surface-muted p-4 text-sm text-muted">Sélectionnez un client.</p></div><div class="flex justify-end gap-3 border-t p-4"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler la validation</button><button type="button" data-confirm disabled class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white disabled:opacity-40">Valider ce permis</button></div>`;
     document.body.append(dialog); dialog.showModal();
     return new Promise(resolve => {

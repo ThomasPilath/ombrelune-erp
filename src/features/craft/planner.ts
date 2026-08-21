@@ -1,6 +1,8 @@
 import { craftArticle, getCraftRecipes, ingredientStock, type RecipeRow } from "../../data/repositories/craft";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
+import { buttonClasses } from "../../ui/components/primitives";
+import { confirmDialog } from "../../ui/components/dialog";
 
 export interface CraftSelection { productId: string; craftCount: number }
 
@@ -13,6 +15,8 @@ interface CraftPlannerOptions {
 }
 
 const idOf = (value: string | number): string => String(value);
+const primaryButton = buttonClasses();
+const secondaryButton = buttonClasses("secondary");
 
 export class CraftPlanner {
   private recipes: RecipeRow[] = [];
@@ -96,17 +100,17 @@ export class CraftPlanner {
       const stock = ingredientStock(recipe);
       const total = totals.get(idOf(recipe.ingredient_id)) ?? needed;
       const cumulativeShortage = total > stock;
-      return `<li class="flex items-baseline justify-between gap-4 py-2 ${cumulativeShortage ? "text-amber-600 dark:text-amber-400" : ""}"><span>${escapeHtml(recipe.ingredient.article)}${cumulativeShortage ? '<small class="mt-1 block font-bold">Ressource indisponible</small>' : ""}</span><span class="shrink-0"><strong class="text-base">${needed}</strong><span class="text-sm font-normal"> /${stock}</span></span></li>`;
-    }).join("") : '<li class="py-3 text-sm text-amber-600 dark:text-amber-400">Aucune recette disponible pour cet objet.</li>';
+      return `<li class="flex items-baseline justify-between gap-4 py-2 ${cumulativeShortage ? "text-warning" : ""}"><span>${escapeHtml(recipe.ingredient.article)}${cumulativeShortage ? '<small class="mt-1 block font-bold">Ressource indisponible</small>' : ""}</span><span class="shrink-0"><strong class="text-base">${needed}</strong><span class="text-sm font-normal"> /${stock}</span></span></li>`;
+    }).join("") : '<li class="py-3 text-sm text-warning">Aucune recette disponible pour cet objet.</li>';
     const hasCumulativeShortage = recipes.some(recipe => (totals.get(idOf(recipe.ingredient_id)) ?? 0) > ingredientStock(recipe));
     return `<section class="rounded-2xl border ${done ? "bg-surface-muted" : "bg-surface"}" data-craft-line="${index}">
       <div class="flex flex-wrap items-end gap-3 p-4">
         <label class="min-w-[12rem] flex-1 text-sm font-bold">Objet<select data-product ${done ? "disabled" : ""} class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3">${options}</select></label>
         <label class="w-28 text-sm font-bold">Crafts<input data-count ${done ? "disabled" : ""} type="number" min="1" value="${selection.craftCount}" class="mt-2 min-h-11 w-full rounded-xl border bg-surface px-3"></label>
-        <button type="button" data-crafted ${done || isBusy || !individuallyPossible ? "disabled" : ""} class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white disabled:opacity-40">${done ? "Fabriqué ✓" : isBusy ? "Fabrication…" : "Fabriqué"}</button>
-        ${this.options.allowAdd === false ? "" : '<button type="button" data-remove class="grid size-11 place-items-center rounded-xl border" aria-label="Retirer cette fabrication">×</button>'}
+        <button type="button" data-crafted ${done || isBusy || !individuallyPossible ? "disabled" : ""} class="${primaryButton}">${done ? "Fabriqué ✓" : isBusy ? "Fabrication…" : "Fabriqué"}</button>
+        ${this.options.allowAdd === false ? "" : `<button type="button" data-remove class="${secondaryButton} px-3" aria-label="Retirer cette fabrication">×</button>`}
       </div>
-      ${done ? "" : `<div class="border-t px-4 py-2"><p class="pt-2 text-sm font-bold">Composants nécessaires</p><ul class="divide-y">${ingredients}</ul>${hasCumulativeShortage ? '<p class="pb-2 text-sm text-amber-600 dark:text-amber-400">Le stock actuel ne permet pas de fabriquer toute la sélection.</p>' : ""}</div>`}
+      ${done ? "" : `<div class="border-t px-4 py-2"><p class="pt-2 text-sm font-bold">Composants nécessaires</p><ul class="divide-y">${ingredients}</ul>${hasCumulativeShortage ? '<p class="pb-2 text-sm text-warning">Le stock actuel ne permet pas de fabriquer toute la sélection.</p>' : ""}</div>`}
     </section>`;
   }
 
@@ -157,16 +161,11 @@ export class CraftPlanner {
     const productName = recipes[0]?.produit.article ?? "cet objet";
     const produced = (recipes[0]?.quantite_produite ?? 0) * selection.craftCount;
     const ingredients = recipes.map(recipe => `<li class="flex justify-between gap-4 py-2"><span>${escapeHtml(recipe.ingredient.article)}</span><strong>${recipe.quantite_requise * selection.craftCount}</strong></li>`).join("");
-    const dialog = document.createElement("dialog");
-    dialog.className = "m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
-    dialog.innerHTML = `<div class="border-b p-5"><h2 class="text-xl font-bold">Confirmer la fabrication</h2><p class="mt-1 text-sm text-muted">Cette action modifiera immédiatement les stocks.</p></div><div class="p-5"><p><strong>${escapeHtml(productName)}</strong> — ${selection.craftCount} craft(s), ${produced} unité(s)</p><ul class="mt-4 divide-y rounded-xl border px-4">${ingredients}</ul></div><div class="flex justify-end gap-3 border-t p-4"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler</button><button type="button" data-confirm class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Confirmer la fabrication</button></div>`;
-    document.body.append(dialog);
-    dialog.showModal();
-    return new Promise(resolve => {
-      const finish = (confirmed: boolean): void => { dialog.close(); dialog.remove(); resolve(confirmed); };
-      dialog.querySelector("[data-cancel]")!.addEventListener("click", () => finish(false));
-      dialog.querySelector("[data-confirm]")!.addEventListener("click", () => finish(true));
-      dialog.addEventListener("cancel", event => { event.preventDefault(); finish(false); }, { once: true });
+    return confirmDialog({
+      title: "Confirmer la fabrication",
+      description: "Cette action modifiera immédiatement les stocks.",
+      content: `<p><strong>${escapeHtml(productName)}</strong> — ${selection.craftCount} craft(s), ${produced} unité(s)</p><ul class="mt-4 divide-y rounded-xl border px-4">${ingredients}</ul>`,
+      confirmLabel: "Confirmer la fabrication"
     });
   }
 }

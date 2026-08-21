@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { readEmployeeSession } from "../../core/employee-session";
+import { currentTheme, setTheme, type VisualTheme } from "../../core/theme";
 import { callRpc, getSupabaseClient } from "../../data/supabase";
-import { asyncState, bindRetry } from "../../ui/components/async-state";
+import { asyncState } from "../../ui/components/async-state";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
 import { panel } from "../../ui/components/panel";
@@ -10,9 +11,11 @@ import {
   responsiveTable,
 } from "../../ui/components/responsive-table";
 import { withPending } from "../../ui/components/pending";
+import { confirmDialog } from "../../ui/components/dialog";
+import { buttonClasses, fieldClasses } from "../../ui/components/primitives";
+import { mountDirectionTabs } from "./tabs";
 
 type Row = Record<string, unknown>;
-type Tab = { id: string; label: string };
 
 const rowSchema = z.record(z.string(), z.unknown());
 const money = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
@@ -80,9 +83,8 @@ const frenchCategory = (value: unknown): string =>
 const frenchElement = (value: unknown): string =>
   elementLabels[String(value)] ?? String(value ?? "—");
 const table = responsiveTable;
-const field = "min-h-11 w-full rounded-xl border bg-surface px-3 text-ink";
-const button =
-  "min-h-11 rounded-xl bg-brand px-4 font-bold text-white disabled:opacity-40";
+const field = fieldClasses();
+const button = buttonClasses();
 const erpSettingsSchema = z.object({
   taux_etudiant: z.coerce.number(),
   taux_adulte: z.coerce.number(),
@@ -164,66 +166,6 @@ function maximumBonus(grade: unknown, settings: ErpSettings): number {
     Patron: "prime_max_patron",
   };
   return settings[keys[String(grade)] ?? "prime_max_adulte"];
-}
-
-function tabs(
-  outlet: HTMLElement,
-  items: Tab[],
-  render: (id: string, content: HTMLElement) => Promise<void>,
-): void {
-  outlet.innerHTML = `<div class="mb-6 flex gap-2 overflow-x-auto border-b" role="tablist" aria-label="Sections de la page">${items.map((item, index) => `<button id="direction-tab-${item.id}" type="button" role="tab" data-tab="${item.id}" aria-controls="direction-tab-panel" aria-selected="${index === 0}" tabindex="${index ? -1 : 0}" class="min-h-11 shrink-0 border-b-2 px-4 font-bold ${index ? "border-transparent text-muted" : "border-brand text-brand"}">${escapeHtml(item.label)}</button>`).join("")}</div><div id="direction-tab-panel" role="tabpanel" tabindex="0" aria-labelledby="direction-tab-${items[0]!.id}"></div>`;
-  const content = outlet.querySelector<HTMLElement>("#direction-tab-panel")!;
-  const controls = [
-    ...outlet.querySelectorAll<HTMLButtonElement>("[data-tab]"),
-  ];
-  let selectionId = 0;
-  const select = async (id: string): Promise<void> => {
-    const currentSelection = ++selectionId;
-    controls.forEach((control) => {
-      const active = control.dataset.tab === id;
-      control.setAttribute("aria-selected", String(active));
-      control.tabIndex = active ? 0 : -1;
-      control.classList.toggle("border-brand", active);
-      control.classList.toggle("text-brand", active);
-      control.classList.toggle("border-transparent", !active);
-      control.classList.toggle("text-muted", !active);
-    });
-    content.setAttribute("aria-labelledby", `direction-tab-${id}`);
-    content.innerHTML = asyncState("loading");
-    const staging = document.createElement("div");
-    try {
-      await render(id, staging);
-      if (currentSelection !== selectionId) return;
-      content.replaceChildren(...staging.childNodes);
-      labelTableControls(content);
-    } catch (error) {
-      if (currentSelection !== selectionId) return;
-      content.innerHTML = asyncState(
-        "error",
-        error instanceof Error ? error.message : undefined,
-        "Réessayer",
-      );
-      bindRetry(content, () => void select(id));
-    }
-  };
-  controls.forEach((control) =>
-    control.addEventListener("click", () => void select(control.dataset.tab!)),
-  );
-  controls.forEach((control, index) =>
-    control.addEventListener("keydown", (event) => {
-      let next = index;
-      if (event.key === "ArrowRight") next = (index + 1) % controls.length;
-      else if (event.key === "ArrowLeft")
-        next = (index - 1 + controls.length) % controls.length;
-      else if (event.key === "Home") next = 0;
-      else if (event.key === "End") next = controls.length - 1;
-      else return;
-      event.preventDefault();
-      controls[next]!.focus();
-      void select(controls[next]!.dataset.tab!);
-    }),
-  );
-  void select(items[0]!.id);
 }
 
 async function renderActivities(outlet: HTMLElement): Promise<void> {
@@ -386,18 +328,18 @@ async function renderActivities(outlet: HTMLElement): Promise<void> {
           String(sales),
           String(craftCount),
           salaryCeilingDoubled
-            ? `<span class="font-bold text-red-600 dark:text-red-400">${money.format(salary)} PO<small class="block text-xs">Plafond + 100%</small></span>`
+            ? `<span class="font-bold text-danger">${money.format(salary)} PO<small class="block text-xs">Plafond + 100%</small></span>`
             : salaryCeilingExceeded
-            ? `<span class="font-bold text-amber-600 dark:text-amber-400">${money.format(salary)} PO<small class="block text-xs">Plafond + 50%</small></span>`
+            ? `<span class="font-bold text-warning">${money.format(salary)} PO<small class="block text-xs">Plafond + 50%</small></span>`
             : salaryCeilingReached
               ? `<span class="font-bold text-threshold">${money.format(salary)} PO<small class="block text-xs">Plafond atteint</small></span>`
               : `<span>${money.format(salary)} PO</span>`,
           period.statut === "ouverte"
-            ? `<input data-activity-prime="${escapeHtml(person.id)}" aria-label="Prime de ${escapeHtml(person.nom_prenom)}, maximum ${bonusMaximum} PO" type="number" min="0" max="${bonusMaximum}" step="1" value="${prime}" class="${field}">`
+            ? `<input data-activity-prime="${escapeHtml(person.id)}" aria-label="Prime de ${escapeHtml(person.nom_prenom)}, maximum ${bonusMaximum} PO" type="number" min="0" max="${bonusMaximum}" step="1" value="${prime}" class="min-h-11 w-full rounded-xl border bg-surface px-3 text-ink disabled:cursor-not-allowed disabled:opacity-60 lg:min-h-9 lg:rounded-lg lg:px-2 lg:py-1">`
             : `<span>${money.format(prime)} PO</span>`,
           `<strong data-activity-total="${escapeHtml(person.id)}">${money.format(total)} PO</strong>`,
           ...(period.statut === "ouverte" ? [] : [`<input data-activity-paid="${escapeHtml(person.id)}" type="checkbox" ${payroll?.paye ? "checked" : ""} class="size-5 accent-[var(--color-brand)]" aria-label="Salaire payé à ${escapeHtml(person.nom_prenom)}">`]),
-          `<button data-save-activity="${escapeHtml(person.id)}" disabled class="min-h-11 rounded-xl border border-brand px-3 font-bold text-brand disabled:opacity-40">Enregistrer</button>`,
+          `<button data-save-activity="${escapeHtml(person.id)}" disabled class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent disabled:opacity-40 lg:min-h-9 lg:rounded-lg lg:px-2 lg:py-1 lg:text-sm">Enregistrer</button>`,
         ],
       ),
     );
@@ -421,8 +363,8 @@ async function renderActivities(outlet: HTMLElement): Promise<void> {
         const value = primeInput ? Number(primeInput.value) : savedPrime;
         const valid = !primeInput || (primeInput.value !== "" && Number.isFinite(value) && value >= 0 && value <= bonusMaximum);
         const dirty = value !== savedPrime || (paidInput ? paidInput.checked !== savedPaid : false);
-        row.classList.toggle("bg-amber-500/15", dirty && valid);
-        row.classList.toggle("bg-red-500/15", dirty && !valid);
+        row.classList.toggle("bg-warning/15", dirty && valid);
+        row.classList.toggle("bg-danger/15", dirty && !valid);
         saveButton.disabled = !dirty || !valid;
         total.textContent = `${money.format(salary + (valid ? value : 0))} PO`;
       };
@@ -517,7 +459,7 @@ async function renderLogs(outlet: HTMLElement): Promise<void> {
     const client = entry.clients as Row | null;
     const dialog = document.createElement("dialog");
     dialog.className =
-      "m-auto max-h-[calc(100dvh-2rem)] w-[min(52rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
+      "m-auto max-h-[calc(100dvh-2rem)] w-[min(52rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop";
     const facts = [
       ["Date", new Date(String(entry.created_at)).toLocaleString("fr-FR")],
       ["Employé", entry.employe_nom],
@@ -527,7 +469,7 @@ async function renderLogs(outlet: HTMLElement): Promise<void> {
       ["Client", client?.nom_prenom ?? "—"],
       ["Résultat", entry.resultat],
     ];
-    dialog.innerHTML = `<div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-surface p-5"><div><p class="text-sm font-bold text-brand">Journal d’activité</p><h2 class="mt-1 text-xl font-bold">Détails de l’action</h2></div><button type="button" data-close class="grid size-11 shrink-0 place-items-center rounded-xl border" aria-label="Fermer">×</button></div><div class="p-5"><dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2">${facts.map(([label, value]) => `<div><dt class="text-xs font-bold uppercase tracking-wide text-muted">${escapeHtml(label)}</dt><dd class="mt-1 break-words font-semibold">${escapeHtml(value ?? "—")}</dd></div>`).join("")}</dl><section class="mt-6 border-t pt-5" aria-labelledby="log-technical-details"><h3 id="log-technical-details" class="font-bold">Détails</h3><div class="mt-3 grid gap-4 lg:grid-cols-3">${[
+    dialog.innerHTML = `<div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-surface p-5"><div><p class="text-sm font-bold text-accent">Journal d’activité</p><h2 class="mt-1 text-xl font-bold">Détails de l’action</h2></div><button type="button" data-close class="grid size-11 shrink-0 place-items-center rounded-xl border" aria-label="Fermer">×</button></div><div class="p-5"><dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2">${facts.map(([label, value]) => `<div><dt class="text-xs font-bold uppercase tracking-wide text-muted">${escapeHtml(label)}</dt><dd class="mt-1 break-words font-semibold">${escapeHtml(value ?? "—")}</dd></div>`).join("")}</dl><section class="mt-6 border-t pt-5" aria-labelledby="log-technical-details"><h3 id="log-technical-details" class="font-bold">Détails</h3><div class="mt-3 grid gap-4 lg:grid-cols-3">${[
       ["Avant", entry.etat_avant],
       ["Après", entry.etat_apres],
       ["Métadonnées", entry.metadata],
@@ -570,7 +512,7 @@ async function renderLogs(outlet: HTMLElement): Promise<void> {
         escapeHtml(frenchCategory(entry.entite_type)),
         escapeHtml(frenchElement(entry.element ?? entry.libelle)),
         escapeHtml(entry.resultat),
-        `<button type="button" data-log-details="${index}" class="inline-flex min-h-11 items-center rounded-xl border border-brand px-3 font-bold text-brand hover:bg-surface-muted" aria-label="Voir les détails de ${escapeHtml(frenchAction(entry.action))}">Voir</button>`,
+        `<button type="button" data-log-details="${index}" class="inline-flex min-h-11 items-center rounded-xl border border-accent px-3 font-bold text-accent hover:bg-surface-muted" aria-label="Voir les détails de ${escapeHtml(frenchAction(entry.action))}">Voir</button>`,
       ]),
       { emptyMessage: "Aucune donnée récupérée." },
     );
@@ -745,26 +687,45 @@ async function renderSummary(outlet: HTMLElement): Promise<void> {
     ["Salaires + primes", -payroll],
     ["Bénéfice net final", gross - taxes - payroll],
   ];
+  const closureSummary = [
+    ["CA total", sales],
+    ["Dépenses", expenses],
+    ["Bénéfice brut", gross],
+    ["Taxes", taxes],
+    ["Salaires + primes", payroll],
+    ["Bénéfice net", gross - taxes - payroll],
+  ]
+    .map(
+      ([label, value]) =>
+        `<div class="rounded-xl border bg-surface-muted px-3 py-2"><dt class="text-xs font-bold text-muted">${label}</dt><dd class="mt-1 font-bold">${money.format(Number(value))} PO</dd></div>`,
+    )
+    .join("");
+  const payrollTable = responsiveTable(
+    ["Employé", "Salaire", "Prime", "Total"],
+    performances.map((person) => {
+      const salary = salaryFromProfit(
+        Number(person.benefice_realise),
+        person.grade,
+        settings,
+      );
+      const prime = Math.min(
+        maximumBonus(person.grade, settings),
+        Number(person.prime_actuelle ?? 0),
+      );
+      return [
+        `<strong>${escapeHtml(person.nom_prenom)}</strong>`,
+        `${money.format(salary)} PO`,
+        `${money.format(prime)} PO`,
+        `<strong>${money.format(salary + prime)} PO</strong>`,
+      ];
+    }),
+    { cardsOnMobile: true, emptyMessage: "Aucune rémunération pour cette période." },
+  );
   outlet.innerHTML = `${
     current
       ? `<div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">${cards.map(([label, value]) => `<section class="rounded-2xl border bg-surface p-5"><p class="text-sm font-bold text-muted">${label}</p><strong class="mt-2 block text-2xl">${money.format(Number(value))} PO</strong></section>`).join("")}</div><div class="mt-5">${panel(
           "Période en cours",
-          `<div class="p-5"><p>Ouverte depuis le <strong>${dateTime(current.debut_at ?? current.date_debut)}</strong> · ${escapeHtml(current.jours_ouverts)} jour(s)</p><p class="mt-2 text-sm text-muted">${current.cloture_recommandee ? "La clôture est recommandée." : `${current.jours_avant_cloture} jour(s) avant la clôture recommandée.`}</p><details class="mt-5 rounded-xl border"><summary class="cursor-pointer p-4 font-bold">Clôturer la période</summary><form data-close-period class="border-t p-4"><div class="grid gap-4 sm:grid-cols-2"><label class="block text-sm font-bold">Date et heure de fin<input name="end" type="datetime-local" step="1" required min="${escapeHtml(dateTimeLocalValue(current.debut_at ?? current.date_debut))}" value="${dateTimeLocalValue()}" class="mt-2 ${field}"></label><label class="block text-sm font-bold">Coffre constaté (PO)<input name="treasury" type="number" min="0" step="0.01" required value="${theoreticalTreasury}" class="mt-2 ${field}"></label></div><p class="mt-2 text-sm text-muted">La période suivante commencera automatiquement une minute après cette heure. Le coffre constaté deviendra la nouvelle référence de trésorerie.</p><p class="mt-4 text-sm text-muted">Les salaires et primes proviennent de l’onglet Activités. La taxe ministérielle appliquée sera de ${money.format(settings.taux_taxe)} %.</p><div class="mt-3 grid gap-3">${performances
-            .map((person) => {
-              const salary = salaryFromProfit(
-                Number(person.benefice_realise),
-                person.grade,
-                settings,
-              );
-              const prime = Math.min(
-                maximumBonus(person.grade, settings),
-                Number(person.prime_actuelle ?? 0),
-              );
-              return `<div class="grid gap-3 rounded-xl bg-surface-muted p-3 sm:grid-cols-[1fr_repeat(3,10rem)]"><strong>${escapeHtml(person.nom_prenom)}</strong><span><small class="block font-bold text-muted">Salaire</small>${money.format(salary)} PO</span><span><small class="block font-bold text-muted">Prime</small>${money.format(prime)} PO</span><strong><small class="block text-muted">Total</small>${money.format(salary + prime)} PO</strong></div>`;
-            })
-            .join(
-              "",
-            )}</div><fieldset class="mt-5 rounded-xl border border-amber-500/60 p-4"><legend class="px-2 font-bold">Journal technique</legend><label class="flex min-h-11 cursor-pointer items-center gap-3"><input data-purge-audit type="checkbox" class="size-5"><span>Purger le journal technique lors de cette clôture</span></label><p class="mt-2 text-sm text-muted">Option facultative. Le journal métier reste conservé pour les analyses de la Direction.</p><label data-backup-confirmation class="mt-3 hidden min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-amber-500/10 p-3 text-sm font-bold"><input data-backup-confirm type="checkbox" class="mt-0.5 size-5"><span>Je confirme avoir effectué et vérifié une sauvegarde récente de la base. La purge est irréversible.</span></label></fieldset><button class="mt-4 ${button}">Clôturer et ouvrir la période suivante</button></form></details></div>`,
+          `<div class="p-5"><p>Ouverte depuis le <strong>${dateTime(current.debut_at ?? current.date_debut)}</strong> · ${escapeHtml(current.jours_ouverts)} jour(s)</p><p class="mt-2 text-sm text-muted">${current.cloture_recommandee ? "La clôture est recommandée." : `${current.jours_avant_cloture} jour(s) avant la clôture recommandée.`}</p><details class="mt-5 rounded-xl border"><summary class="cursor-pointer p-4 font-bold">Clôturer la période</summary><form data-close-period class="border-t p-4"><div class="grid gap-4 sm:grid-cols-2"><label class="block text-sm font-bold">Date et heure de fin<input name="end" type="datetime-local" step="1" required min="${escapeHtml(dateTimeLocalValue(current.debut_at ?? current.date_debut))}" value="${dateTimeLocalValue()}" class="mt-2 ${field}"></label><label class="block text-sm font-bold">Coffre constaté (PO)<input name="treasury" type="number" min="0" step="0.01" required value="${theoreticalTreasury}" class="mt-2 ${field}"></label></div><p class="mt-2 text-sm text-muted">La période suivante commencera automatiquement une minute après cette heure. Le coffre constaté deviendra la nouvelle référence de trésorerie.</p><p class="mt-4 text-sm text-muted">Les salaires et primes proviennent de l’onglet Activités. La taxe ministérielle appliquée sera de ${money.format(settings.taux_taxe)} %.</p><section class="mt-4" aria-labelledby="closure-summary-title"><h3 id="closure-summary-title" class="mb-2 text-sm font-bold">Résumé général de la session</h3><dl class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">${closureSummary}</dl></section><div class="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(20rem,1fr)] lg:items-start"><div class="overflow-hidden rounded-xl border">${payrollTable}</div><div><fieldset class="rounded-xl border border-warning/60 p-4"><legend class="px-2 font-bold">Journal technique</legend><label class="flex min-h-11 cursor-pointer items-center gap-3"><input data-purge-audit type="checkbox" class="size-5"><span>Purger le journal technique lors de cette clôture</span></label><p class="mt-2 text-sm text-muted">Option facultative. Le journal métier reste conservé pour les analyses de la Direction.</p><label data-backup-confirmation class="mt-3 hidden min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-warning/10 p-3 text-sm font-bold"><input data-backup-confirm type="checkbox" class="mt-0.5 size-5"><span>Je confirme avoir effectué et vérifié une sauvegarde récente de la base. La purge est irréversible.</span></label></fieldset><button class="mt-4 w-full ${button}">Clôturer et ouvrir la période suivante</button></div></div></form></details></div>`,
         )}</div>`
       : panel(
           "Période comptable",
@@ -925,9 +886,9 @@ async function renderEmployees(outlet: HTMLElement): Promise<void> {
         `<select aria-label="Rôle de ${escapeHtml(person.nom_prenom)}" data-grade="${escapeHtml(person.id)}" class="${field}">${["Étudiant", "Adulte", "Co-Patron", "Patron"].map((grade) => `<option ${grade === person.grade ? "selected" : ""}>${grade}</option>`).join("")}</select>`,
         `<textarea aria-label="Note concernant ${escapeHtml(person.nom_prenom)}" data-note="${escapeHtml(person.id)}" maxlength="1000" rows="2" class="${field} py-3">${escapeHtml(person.note ?? "")}</textarea>`,
         person.actif
-          ? '<span class="font-bold text-green-600">Actif</span>'
+          ? '<span class="font-bold text-success">Actif</span>'
           : '<span class="font-bold text-muted">Archivé</span>',
-        `<div class="flex gap-2"><button data-save="${escapeHtml(person.id)}" class="min-h-11 rounded-xl border border-brand px-3 font-bold text-brand">Enregistrer</button><button data-toggle="${escapeHtml(person.id)}" class="min-h-11 rounded-xl border px-3 font-bold">${person.actif ? "Archiver" : "Réactiver"}</button></div>`,
+        `<div class="flex gap-2"><button data-save="${escapeHtml(person.id)}" class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent">Enregistrer</button><button data-toggle="${escapeHtml(person.id)}" class="min-h-11 rounded-xl border px-3 font-bold">${person.actif ? "Archiver" : "Réactiver"}</button></div>`,
       ]),
     ),
   )}</div>`;
@@ -1010,36 +971,7 @@ async function renderEmployees(outlet: HTMLElement): Promise<void> {
 }
 
 function confirmSettings(title: string, description: string): Promise<boolean> {
-  const dialog = document.createElement("dialog");
-  dialog.className =
-    "m-auto w-[min(36rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
-  dialog.innerHTML = `<div class="border-b p-5"><h2 class="text-xl font-bold">${escapeHtml(title)}</h2><p class="mt-2 text-sm text-muted">${escapeHtml(description)}</p></div><div class="flex justify-end gap-3 p-4"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler</button><button type="button" data-confirm class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Confirmer</button></div>`;
-  document.body.append(dialog);
-  dialog.showModal();
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (result: boolean): void => {
-      if (settled) return;
-      settled = true;
-      dialog.close();
-      dialog.remove();
-      resolve(result);
-    };
-    dialog
-      .querySelector("[data-cancel]")!
-      .addEventListener("click", () => finish(false));
-    dialog
-      .querySelector("[data-confirm]")!
-      .addEventListener("click", () => finish(true));
-    dialog.addEventListener(
-      "cancel",
-      (event) => {
-        event.preventDefault();
-        finish(false);
-      },
-      { once: true },
-    );
-  });
+  return confirmDialog({ title, description });
 }
 
 async function renderErpSettings(outlet: HTMLElement): Promise<void> {
@@ -1060,7 +992,57 @@ async function renderErpSettings(outlet: HTMLElement): Promise<void> {
     ],
     ["Patron", "patron", settings.taux_patron, settings.plafond_patron, settings.prime_max_patron],
   ] as const;
-  outlet.innerHTML = `<div class="grid gap-5">${panel("Règles financières", `<form data-erp-settings class="p-5"><p class="mb-5 text-sm text-muted">Chaque grade possède son propre pourcentage, plafond et maximum de prime.</p><div class="overflow-x-auto"><table class="w-full min-w-[52rem]"><thead><tr class="border-b text-left"><th class="p-3">Grade</th><th class="p-3">Pourcentage du bénéfice</th><th class="p-3">Plafond (PO)</th><th class="p-3">Prime maximale (PO)</th></tr></thead><tbody>${gradeFields.map(([label, key, rate, ceiling, bonus]) => `<tr class="border-b"><th scope="row" class="p-3 text-left">${label}</th><td class="p-3"><label class="sr-only" for="rate-${key}">Pourcentage ${label}</label><div class="flex items-center gap-2"><input id="rate-${key}" name="taux_${key}" type="number" min="0" max="100" step="0.01" required value="${rate}" class="${field}"><span>%</span></div></td><td class="p-3"><label class="sr-only" for="ceiling-${key}">Plafond ${label}</label><input id="ceiling-${key}" name="plafond_${key}" type="number" min="0" step="1" required value="${ceiling}" class="${field}"></td><td class="p-3"><label class="sr-only" for="bonus-${key}">Prime maximale ${label}</label><input id="bonus-${key}" name="prime_max_${key}" type="number" min="0" step="1" required value="${bonus}" class="${field}"></td></tr>`).join("")}</tbody></table></div><div class="mt-5 max-w-sm"><label class="text-sm font-bold">Taxe ministérielle<div class="mt-2 flex items-center gap-2"><input name="taux_taxe" type="number" min="0" max="100" step="0.01" required value="${settings.taux_taxe}" class="${field}"><span>%</span></div></label></div><button class="mt-5 ${button}">Enregistrer les règles</button></form>`)}${panel("Référence du coffre", `<div class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p class="text-sm font-bold text-muted">Montant dans le coffre</p><p class="mt-1 text-3xl font-black">${money.format(currentTreasury)} PO</p><p class="mt-2 text-xs text-muted">Dernier recalage le ${dateTime(settings.reference_tresorerie_at)}</p></div><button type="button" data-update-treasury class="${button} shrink-0">Mettre à jour</button></div>`)}${panel("Mot de passe Patron", `<form data-direction-password class="grid gap-4 p-5 sm:grid-cols-2"><p class="text-sm text-muted sm:col-span-2">Le nouveau mot de passe remplacera tous les accès Direction actuels. Il doit contenir au moins 6 caractères.</p><label class="text-sm font-bold">Nouveau mot de passe<input name="password" type="password" minlength="6" autocomplete="new-password" required class="mt-2 ${field}"></label><label class="text-sm font-bold">Confirmer le mot de passe<input name="confirmation" type="password" minlength="6" autocomplete="new-password" required class="mt-2 ${field}"></label><button class="${button} sm:col-span-2 sm:justify-self-start">Modifier le mot de passe</button></form>`)}</div>`;
+  outlet.innerHTML = `<div class="grid gap-5">${panel("Règles financières", `<form data-erp-settings class="p-5"><p class="mb-5 text-sm text-muted">Chaque grade possède son propre pourcentage, plafond et maximum de prime.</p><div class="overflow-x-auto"><table class="w-full min-w-[52rem]"><thead><tr class="border-b text-left"><th class="p-3">Grade</th><th class="p-3">Pourcentage du bénéfice</th><th class="p-3">Plafond (PO)</th><th class="p-3">Prime maximale (PO)</th></tr></thead><tbody>${gradeFields.map(([label, key, rate, ceiling, bonus]) => `<tr class="border-b"><th scope="row" class="p-3 text-left">${label}</th><td class="p-3"><label class="sr-only" for="rate-${key}">Pourcentage ${label}</label><div class="flex items-center gap-2"><input id="rate-${key}" name="taux_${key}" type="number" min="0" max="100" step="0.01" required value="${rate}" class="${field}"><span>%</span></div></td><td class="p-3"><label class="sr-only" for="ceiling-${key}">Plafond ${label}</label><input id="ceiling-${key}" name="plafond_${key}" type="number" min="0" step="1" required value="${ceiling}" class="${field}"></td><td class="p-3"><label class="sr-only" for="bonus-${key}">Prime maximale ${label}</label><input id="bonus-${key}" name="prime_max_${key}" type="number" min="0" step="1" required value="${bonus}" class="${field}"></td></tr>`).join("")}</tbody></table></div><div class="mt-5 max-w-sm"><label class="text-sm font-bold">Taxe ministérielle<div class="mt-2 flex items-center gap-2"><input name="taux_taxe" type="number" min="0" max="100" step="0.01" required value="${settings.taux_taxe}" class="${field}"><span>%</span></div></label></div><button class="mt-5 ${button}">Enregistrer les règles</button></form>`)}${panel("Référence du coffre", `<div class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p class="text-sm font-bold text-muted">Montant dans le coffre</p><p class="mt-1 text-3xl font-black">${money.format(currentTreasury)} PO</p><p class="mt-2 text-xs text-muted">Dernier recalage le ${dateTime(settings.reference_tresorerie_at)}</p></div><button type="button" data-update-treasury class="${button} shrink-0">Mettre à jour</button></div>`)}${panel("Mot de passe Patron", `<form data-direction-password class="grid gap-4 p-5 sm:grid-cols-2"><p class="text-sm text-muted sm:col-span-2">Le nouveau mot de passe remplacera tous les accès Direction actuels. Il doit contenir au moins 6 caractères.</p><label class="text-sm font-bold">Nouveau mot de passe<input name="password" type="password" minlength="6" autocomplete="new-password" required class="mt-2 ${field}"></label><label class="text-sm font-bold">Confirmer le mot de passe<input name="confirmation" type="password" minlength="6" autocomplete="new-password" required class="mt-2 ${field}"></label><button class="${button} sm:col-span-2 sm:justify-self-start">Modifier le mot de passe</button></form>`)}${panel("Thème de l’interface", `<div class="p-5"><div class="grid max-w-2xl gap-3 sm:grid-cols-2" role="group" aria-label="Choisir le thème de l’interface"><button type="button" data-theme-choice="elixir" class="min-h-20 rounded-xl border p-4 text-left"><strong class="block">Thème Elixir</strong><span class="mt-1 block text-sm text-muted">Interface claire et lumineuse.</span></button><button type="button" data-theme-choice="heritage" class="min-h-20 rounded-xl border p-4 text-left"><strong class="block">Thème Ombrelune</strong><span class="mt-1 block text-sm text-muted">Identité historique bleu nuit.</span></button></div><p class="mt-4 text-sm text-muted">Le choix de ce paramètre est personnel et ne s’appliquera qu’à l’utilisateur actuel.</p></div>`)}</div>`;
+  const settingsSections = outlet.firstElementChild as HTMLElement;
+  const financialPanel = settingsSections.children[0] as HTMLElement;
+  const treasuryPanel = settingsSections.children[1] as HTMLElement;
+  const passwordPanel = settingsSections.children[2] as HTMLElement;
+  const themePanel = settingsSections.children[3] as HTMLElement;
+  const firstRow = document.createElement("div");
+  firstRow.className = "grid gap-5 lg:grid-cols-[minmax(0,2.2fr)_minmax(22rem,1fr)] lg:items-stretch";
+  const settingsMainColumn = document.createElement("div");
+  settingsMainColumn.className = "grid h-full gap-5";
+  const settingsSideColumn = document.createElement("div");
+  settingsSideColumn.className = "grid h-full gap-5";
+  settingsSections.insertBefore(firstRow, financialPanel);
+  firstRow.append(settingsMainColumn, settingsSideColumn);
+  settingsMainColumn.append(financialPanel, themePanel);
+  settingsSideColumn.append(treasuryPanel, passwordPanel);
+  const compactPasswordForm = passwordPanel.querySelector<HTMLFormElement>("[data-direction-password]")!;
+  compactPasswordForm.className = "grid gap-4 p-5";
+  [...compactPasswordForm.children].forEach(child => {
+    child.classList.remove("sm:col-span-2", "sm:justify-self-start");
+  });
+  const treasuryButton = treasuryPanel.querySelector<HTMLButtonElement>("[data-update-treasury]")!;
+  treasuryButton.parentElement!.className = "flex flex-col gap-4 p-5";
+  treasuryButton.classList.add("w-full");
+  treasuryButton.disabled = true;
+  treasuryButton.insertAdjacentHTML("beforebegin", `<label class="text-sm font-bold">Nouvelle valeur du coffre (PO)<input data-treasury-amount type="number" min="0" step="0.01" class="mt-2 ${field}" placeholder="Saisir un montant…"></label>`);
+  const treasuryAmount = treasuryPanel.querySelector<HTMLInputElement>("[data-treasury-amount]")!;
+  const syncTreasuryButton = (): void => {
+    const amount = Number(treasuryAmount.value);
+    treasuryButton.disabled = treasuryAmount.value.trim() === "" || !Number.isFinite(amount) || amount < 0;
+  };
+  treasuryAmount.addEventListener("input", syncTreasuryButton);
+  const themeButtons = [...outlet.querySelectorAll<HTMLButtonElement>("[data-theme-choice]")];
+  const syncThemeChoices = (): void => {
+    const selectedTheme = currentTheme();
+    themeButtons.forEach(themeButton => {
+      const selected = themeButton.dataset.themeChoice === selectedTheme;
+      themeButton.setAttribute("aria-pressed", String(selected));
+      themeButton.classList.toggle("border-brand", selected);
+      themeButton.classList.toggle("bg-brand", selected);
+      themeButton.classList.toggle("text-white", selected);
+      themeButton.classList.toggle("shadow-[var(--shadow-panel)]", selected);
+      themeButton.querySelector("span")?.classList.toggle("text-white/80", selected);
+      themeButton.querySelector("span")?.classList.toggle("text-muted", !selected);
+    });
+  };
+  themeButtons.forEach(themeButton => themeButton.addEventListener("click", () => {
+    setTheme(themeButton.dataset.themeChoice as VisualTheme);
+    syncThemeChoices();
+  }));
+  syncThemeChoices();
   const settingsForm = outlet.querySelector<HTMLFormElement>(
     "[data-erp-settings]",
   )!;
@@ -1091,43 +1073,29 @@ async function renderErpSettings(outlet: HTMLElement): Promise<void> {
       );
     }
   });
-  outlet.querySelector<HTMLButtonElement>("[data-update-treasury]")!
-    .addEventListener("click", () => {
-      const dialog = document.createElement("dialog");
-      dialog.className =
-        "m-auto w-[min(32rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
-      dialog.innerHTML = `<form data-update-treasury-form><div class="border-b p-5"><h2 class="text-xl font-bold">Mettre à jour le coffre</h2><p class="mt-2 text-sm text-muted">Le montant saisi deviendra la nouvelle référence. Cette modification sera enregistrée dans le journal d’activité.</p></div><div class="p-5"><label class="text-sm font-bold">Montant dans le coffre (PO)<input name="amount" type="number" min="0" step="0.01" required value="${currentTreasury}" class="mt-2 ${field}"></label></div><div class="flex flex-col-reverse gap-3 border-t p-4 sm:flex-row sm:justify-end"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler</button><button class="${button}">Enregistrer</button></div></form>`;
-      document.body.append(dialog);
-      const close = (): void => dialog.close();
-      dialog.querySelector<HTMLButtonElement>("[data-cancel]")!
-        .addEventListener("click", close);
-      dialog.addEventListener("close", () => dialog.remove(), { once: true });
-      dialog.querySelector<HTMLFormElement>("[data-update-treasury-form]")!
-        .addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const form = event.currentTarget as HTMLFormElement;
-          const amount = Number(new FormData(form).get("amount"));
-          const submit = form.querySelector<HTMLButtonElement>("button:not([type])")!;
-          await withPending(submit, "Enregistrement…", async () => {
-            try {
-              await callRpc(
-                "definir_reference_tresorerie",
-                { p_employe_id: employeeId(), p_montant: amount },
-                z.boolean(),
-              );
-              close();
-              showToast("Montant du coffre mis à jour et journalisé.", "success");
-              await renderErpSettings(outlet);
-            } catch (error) {
-              showToast(
-                error instanceof Error ? error.message : "Modification impossible.",
-                "error",
-              );
-            }
-          });
-        });
-      dialog.showModal();
+  treasuryButton.addEventListener("click", async () => {
+    const amount = Number(treasuryAmount.value);
+    if (treasuryButton.disabled || !await confirmSettings(
+      "Mettre à jour la référence du coffre",
+      `Le montant de référence sera remplacé par ${money.format(amount)} PO et l’action sera journalisée.`,
+    )) return;
+    await withPending(treasuryButton, "Enregistrement…", async () => {
+      try {
+        await callRpc(
+          "definir_reference_tresorerie",
+          { p_employe_id: employeeId(), p_montant: amount },
+          z.boolean(),
+        );
+        showToast("Montant du coffre mis à jour et journalisé.", "success");
+        await renderErpSettings(outlet);
+      } catch (error) {
+        showToast(
+          error instanceof Error ? error.message : "Modification impossible.",
+          "error",
+        );
+      }
     });
+  });
   const passwordForm = outlet.querySelector<HTMLFormElement>(
     "[data-direction-password]",
   )!;
@@ -1183,7 +1151,7 @@ async function renderCatalogue(outlet: HTMLElement): Promise<void> {
         `<input data-buy="${escapeHtml(article.id)}" type="number" min="0" step="0.01" value="${escapeHtml(article.prix_achat)}" class="${field}">`,
         `<input data-sell="${escapeHtml(article.id)}" type="number" min="0" step="0.01" value="${escapeHtml(article.prix_vente)}" class="${field}">`,
         article.actif ? "Actif" : "Archivé",
-        `<div class="flex gap-2"><button data-save="${escapeHtml(article.id)}" class="min-h-11 rounded-xl border border-brand px-3 font-bold text-brand">Enregistrer</button><button data-toggle="${escapeHtml(article.id)}" class="min-h-11 rounded-xl border px-3 font-bold">${article.actif ? "Archiver" : "Réactiver"}</button></div>`,
+        `<div class="flex gap-2"><button data-save="${escapeHtml(article.id)}" class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent">Enregistrer</button><button data-toggle="${escapeHtml(article.id)}" class="min-h-11 rounded-xl border px-3 font-bold">${article.actif ? "Archiver" : "Réactiver"}</button></div>`,
       ]),
     ),
   )}</div>`;
@@ -1293,37 +1261,71 @@ async function renderCatalogue(outlet: HTMLElement): Promise<void> {
 }
 
 async function renderRecipes(outlet: HTMLElement): Promise<void> {
-  const [recipes, articles] = await Promise.all([
-    rows(
-      "recettes_craft",
-      "*,produit:catalogue!produit_id(article),ingredient:catalogue!ingredient_id(article)",
-    ),
-    rows("catalogue_actif"),
-  ]);
+  const articles = await rows("catalogue_actif");
   const products = articles.filter((item) => item.type_article === "objet");
   const ingredients = articles.filter(
     (item) => item.type_article === "ingredient",
   );
-  outlet.innerHTML = `${panel("Ajouter une ligne de recette", `<form data-recipe class="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5"><label class="text-sm font-bold">Produit<select name="product" required class="mt-2 ${field}">${products.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.article)}</option>`).join("")}</select></label><label class="text-sm font-bold">Ingrédient<select name="ingredient" required class="mt-2 ${field}">${ingredients.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.article)}</option>`).join("")}</select></label><label class="text-sm font-bold">Quantité requise<input name="required" type="number" min="1" value="1" class="mt-2 ${field}"></label><label class="text-sm font-bold">Quantité produite<input name="produced" type="number" min="1" value="1" class="mt-2 ${field}"></label><button class="mt-auto ${button}" ${products.length && ingredients.length ? "" : "disabled"}>Ajouter</button></form>`)}<div class="mt-5">${panel(
-    "Recettes",
-    table(
-      ["Produit", "Ingrédient", "Requis", "Produit", "Action"],
-      recipes.map((recipe) => {
-        const product = recipe.produit as Row;
-        const ingredient = recipe.ingredient as Row;
-        return [
-          escapeHtml(product?.article),
-          escapeHtml(ingredient?.article),
-          escapeHtml(recipe.quantite_requise),
-          escapeHtml(recipe.quantite_produite),
-          `<button data-delete="${escapeHtml(recipe.id)}" class="min-h-11 rounded-xl border px-3 font-bold text-red-600">Supprimer</button>`,
-        ];
-      }),
-    ),
-  )}</div>`;
-  outlet
-    .querySelector<HTMLFormElement>("[data-recipe]")!
-    .addEventListener("submit", async (event) => {
+  outlet.innerHTML = `<div class="grid items-stretch gap-5 xl:grid-cols-[minmax(20rem,.85fr)_minmax(30rem,1.15fr)]">
+    ${panel("🧪 Construire une recette", `<form data-recipe class="flex h-full flex-col gap-5 p-5"><label class="text-sm font-bold">1. Produit à fabriquer<select name="product" required class="mt-2 ${field}">${products.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.article)}</option>`).join("")}</select></label><div class="border-t pt-5"><label class="text-sm font-bold">2. Ingrédient requis<select name="ingredient" required class="mt-2 ${field}">${ingredients.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.article)}</option>`).join("")}</select></label><div class="mt-4 grid gap-4 sm:grid-cols-2"><label class="text-sm font-bold">3. Quantité requise<input name="required" type="number" min="1" value="1" class="mt-2 ${field}"></label><label class="text-sm font-bold">Quantité produite par craft<input name="produced" type="number" min="1" value="1" class="mt-2 ${field}"></label></div></div><button class="mt-auto ${button}" ${products.length && ingredients.length ? "" : "disabled"}>+ Ajouter à la recette</button></form>`)}
+    ${panel("📜 Recette actuelle", `<div class="p-5"><p class="text-sm text-muted">Sélectionnez un produit à gauche pour consulter et modifier sa recette.</p><div data-current-recipe class="mt-4" aria-live="polite">${asyncState("loading")}</div></div>`)}
+  </div>
+  <details data-all-recipes class="mt-5 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><summary class="flex min-h-14 cursor-pointer items-center justify-between gap-4 px-5 py-3 font-bold"><span>Liste complète des recettes</span><span class="text-sm font-normal text-muted">Charger et afficher</span></summary><div data-all-recipes-content class="border-t" aria-live="polite"></div></details>`;
+
+  const form = outlet.querySelector<HTMLFormElement>("[data-recipe]")!;
+  const productSelect = form.elements.namedItem("product") as HTMLSelectElement;
+  const currentRecipe = outlet.querySelector<HTMLElement>("[data-current-recipe]")!;
+  const recipeSelect = "*,produit:catalogue!produit_id(article),ingredient:catalogue!ingredient_id(article)";
+  let allRecipesLoaded = false;
+
+  const productRecipes = async (productId: string): Promise<Row[]> => {
+    const { data, error } = await getSupabaseClient().from("recettes_craft").select(recipeSelect).eq("produit_id", productId).order("id");
+    if (error) throw new Error(error.message);
+    return z.array(rowSchema).parse(data);
+  };
+
+  const recipeRows = (recipes: Row[], includeProduct: boolean): string => table(
+    includeProduct ? ["Produit", "Ingrédient", "Requis", "Produit", "Action"] : ["Ingrédient", "Quantité", "Action"],
+    recipes.map((recipe) => {
+      const product = recipe.produit as Row;
+      const ingredient = recipe.ingredient as Row;
+      const cells = includeProduct ? [escapeHtml(product?.article)] : [];
+      cells.push(
+        escapeHtml(ingredient?.article),
+        `×${escapeHtml(recipe.quantite_requise)}`,
+      );
+      if (includeProduct) cells.push(escapeHtml(recipe.quantite_produite));
+      cells.push(`<button data-delete-recipe="${escapeHtml(recipe.id)}" class="min-h-10 rounded-xl border px-3 font-bold text-danger">Retirer</button>`);
+      return cells;
+    }),
+  );
+
+  const loadCurrentRecipe = async (): Promise<void> => {
+    const product = products.find(item => String(item.id) === productSelect.value);
+    currentRecipe.innerHTML = asyncState("loading");
+    try {
+      const selectedRecipes = await productRecipes(productSelect.value);
+      currentRecipe.innerHTML = `<section class="overflow-hidden rounded-xl border border-accent"><div class="bg-surface-muted px-4 py-3"><h3 class="text-lg font-bold">Recette : ${escapeHtml(product?.article ?? "Produit")}</h3></div>${selectedRecipes.length ? recipeRows(selectedRecipes, false) : '<p class="p-6 text-center text-muted">Aucun ingrédient dans cette recette.</p>'}</section>`;
+    } catch (error) { currentRecipe.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined); }
+  };
+
+  const loadAllRecipes = async (): Promise<void> => {
+    const content = outlet.querySelector<HTMLElement>("[data-all-recipes-content]")!;
+    content.innerHTML = asyncState("loading");
+    try {
+      const recipes = await rows("recettes_craft", recipeSelect);
+      content.innerHTML = recipes.length ? recipeRows(recipes, true) : '<p class="p-8 text-center text-muted">Aucune recette enregistrée.</p>';
+      allRecipesLoaded = true;
+    } catch (error) { content.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined); }
+  };
+
+  const refreshVisibleRecipes = async (): Promise<void> => {
+    await loadCurrentRecipe();
+    if (allRecipesLoaded) await loadAllRecipes();
+  };
+
+  productSelect.addEventListener("change", () => void loadCurrentRecipe());
+  form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget as HTMLFormElement);
       try {
@@ -1338,7 +1340,7 @@ async function renderRecipes(outlet: HTMLElement): Promise<void> {
             }),
         );
         showToast("Ligne de recette ajoutée.", "success");
-        await renderRecipes(outlet);
+        await refreshVisibleRecipes();
       } catch (error) {
         showToast(
           error instanceof Error ? error.message : "Ajout impossible.",
@@ -1346,27 +1348,31 @@ async function renderRecipes(outlet: HTMLElement): Promise<void> {
         );
       }
     });
-  outlet
-    .querySelectorAll<HTMLButtonElement>("[data-delete]")
-    .forEach((control) =>
-      control.addEventListener("click", async () => {
+
+  outlet.querySelector<HTMLDetailsElement>("[data-all-recipes]")!.addEventListener("toggle", event => {
+    const details = event.currentTarget as HTMLDetailsElement;
+    if (details.open && !allRecipesLoaded) void loadAllRecipes();
+  });
+  outlet.addEventListener("click", async event => {
+    const control = (event.target as Element).closest<HTMLButtonElement>("[data-delete-recipe]");
+    if (!control) return;
         try {
           await mutate(
             getSupabaseClient()
               .from("recettes_craft")
               .delete()
-              .eq("id", control.dataset.delete),
+              .eq("id", control.dataset.deleteRecipe),
           );
           showToast("Ligne supprimée.", "success");
-          await renderRecipes(outlet);
+          await refreshVisibleRecipes();
         } catch (error) {
           showToast(
             error instanceof Error ? error.message : "Suppression impossible.",
             "error",
           );
         }
-      }),
-    );
+  });
+  await loadCurrentRecipe();
 }
 
 async function renderStocks(outlet: HTMLElement): Promise<void> {
@@ -1399,7 +1405,7 @@ async function renderStocks(outlet: HTMLElement): Promise<void> {
           `<input aria-label="Stock minimum de ${escapeHtml(article.article)}" data-minimum="${escapeHtml(article.id)}" data-initial="${escapeHtml(minimum)}" type="number" min="0" step="1" value="${escapeHtml(minimum)}" class="${field}">`,
           `<input aria-label="Stock maximal de ${escapeHtml(article.article)}" data-maximum="${escapeHtml(article.id)}" data-initial="${escapeHtml(maximum)}" type="number" min="0" step="1" value="${escapeHtml(maximum)}" placeholder="Sans limite" class="${field}">`,
           article.actif ? "Actif" : "Archivé",
-          `<button data-save="${escapeHtml(article.id)}" disabled class="min-h-11 rounded-xl border border-brand px-3 font-bold text-brand disabled:opacity-40">Enregistrer</button>`,
+          `<button data-save="${escapeHtml(article.id)}" disabled class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent disabled:opacity-40">Enregistrer</button>`,
         ];
       }),
     );
@@ -1411,7 +1417,7 @@ async function renderStocks(outlet: HTMLElement): Promise<void> {
   );
   outlet.innerHTML = panel(
     "Stocks",
-    `<p class="border-b p-4 text-sm text-muted">La quantité réelle et les seuils minimum et maximal peuvent alimenter les alertes, scripts et suggestions de rachat. Une ligne modifiée apparaît en jaune ; une valeur invalide apparaît en rouge.</p><div class="flex gap-2 border-b px-4 pt-3" role="tablist" aria-label="Catégories de stocks"><button id="stock-tab-products" type="button" role="tab" data-stock-category="products" aria-controls="stock-panel-products" aria-selected="true" class="min-h-11 border-b-2 border-brand px-4 font-bold text-brand">Articles (${products.length})</button><button id="stock-tab-ingredients" type="button" role="tab" data-stock-category="ingredients" aria-controls="stock-panel-ingredients" aria-selected="false" tabindex="-1" class="min-h-11 border-b-2 border-transparent px-4 font-bold text-muted">Ingrédients (${ingredients.length})</button></div><div id="stock-panel-products" role="tabpanel" aria-labelledby="stock-tab-products">${stockTable(products)}</div><div id="stock-panel-ingredients" role="tabpanel" aria-labelledby="stock-tab-ingredients" hidden>${stockTable(ingredients)}</div>`,
+    `<p class="border-b p-4 text-sm text-muted">La quantité réelle et les seuils minimum et maximal peuvent alimenter les alertes, scripts et suggestions de rachat. Une ligne modifiée apparaît en jaune ; une valeur invalide apparaît en rouge.</p><div class="flex gap-2 border-b px-4 pt-3" role="tablist" aria-label="Catégories de stocks"><button id="stock-tab-products" type="button" role="tab" data-stock-category="products" aria-controls="stock-panel-products" aria-selected="true" class="min-h-11 border-b-2 border-accent px-4 font-bold text-accent">Articles (${products.length})</button><button id="stock-tab-ingredients" type="button" role="tab" data-stock-category="ingredients" aria-controls="stock-panel-ingredients" aria-selected="false" tabindex="-1" class="min-h-11 border-b-2 border-transparent px-4 font-bold text-muted">Ingrédients (${ingredients.length})</button></div><div id="stock-panel-products" role="tabpanel" aria-labelledby="stock-tab-products">${stockTable(products)}</div><div id="stock-panel-ingredients" role="tabpanel" aria-labelledby="stock-tab-ingredients" hidden>${stockTable(ingredients)}</div>`,
   );
   const categoryControls = [
     ...outlet.querySelectorAll<HTMLButtonElement>("[data-stock-category]"),
@@ -1429,8 +1435,8 @@ async function renderStocks(outlet: HTMLElement): Promise<void> {
       const active = categoryControl.dataset.stockCategory === category;
       categoryControl.setAttribute("aria-selected", String(active));
       categoryControl.tabIndex = active ? 0 : -1;
-      categoryControl.classList.toggle("border-brand", active);
-      categoryControl.classList.toggle("text-brand", active);
+      categoryControl.classList.toggle("border-accent", active);
+      categoryControl.classList.toggle("text-accent", active);
       categoryControl.classList.toggle("border-transparent", !active);
       categoryControl.classList.toggle("text-muted", !active);
       categoryPanels.get(categoryControl.dataset.stockCategory!)!.hidden =
@@ -1487,8 +1493,8 @@ async function renderStocks(outlet: HTMLElement): Promise<void> {
           maximum.value === "" ||
           Number(minimum.value) <= Number(maximum.value);
         const valid = validValues && validRange;
-        row.classList.toggle("bg-amber-500/15", dirty && valid);
-        row.classList.toggle("bg-red-500/15", dirty && !valid);
+        row.classList.toggle("bg-warning/15", dirty && valid);
+        row.classList.toggle("bg-danger/15", dirty && !valid);
         control.disabled = !dirty || !valid;
       };
       quantity.addEventListener("input", updateState);
@@ -1504,7 +1510,7 @@ async function renderStocks(outlet: HTMLElement): Promise<void> {
         const newMaximum = maximum.value === "" ? "Sans limite" : maximum.value;
         const dialog = document.createElement("dialog");
         dialog.className =
-          "m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-slate-950/70";
+          "m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop";
         dialog.innerHTML = `<div class="border-b p-5"><h2 class="text-xl font-bold">Confirmer la modification du stock</h2><p class="mt-2 text-sm text-muted">Vérifiez les nouvelles valeurs de <strong>${escapeHtml(article.article)}</strong>.</p></div><dl class="grid gap-4 p-5 sm:grid-cols-3"><div class="rounded-xl bg-surface-muted p-4"><dt class="text-sm font-bold">Quantité</dt><dd class="mt-2"><span class="text-muted">${escapeHtml(quantity.dataset.initial)}</span> → <strong>${escapeHtml(quantity.value)}</strong></dd></div><div class="rounded-xl bg-surface-muted p-4"><dt class="text-sm font-bold">Stock minimum</dt><dd class="mt-2"><span class="text-muted">${escapeHtml(oldMinimum)}</span> → <strong>${escapeHtml(newMinimum)}</strong></dd></div><div class="rounded-xl bg-surface-muted p-4"><dt class="text-sm font-bold">Stock maximal</dt><dd class="mt-2"><span class="text-muted">${escapeHtml(oldMaximum)}</span> → <strong>${escapeHtml(newMaximum)}</strong></dd></div></dl><div class="flex justify-end gap-3 border-t p-4"><button type="button" data-cancel class="min-h-11 rounded-xl border px-4 font-bold">Annuler</button><button type="button" data-confirm class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Confirmer et enregistrer</button></div>`;
         document.body.append(dialog);
         const close = (): void => {
@@ -1568,52 +1574,16 @@ export async function mountDirectionPage(
   outlet: HTMLElement,
   pageId: string,
 ): Promise<() => void> {
-  if (pageId === "pilotage")
-    tabs(
-      outlet,
-      [
-        { id: "activities", label: "Activités" },
-        { id: "logs", label: "Journal d’activité" },
-      ],
-      (id, content) =>
-        id === "activities" ? renderActivities(content) : renderLogs(content),
-    );
-  else if (pageId === "finances")
-    tabs(
-      outlet,
-      [
-        { id: "summary", label: "Synthèse financière" },
-        { id: "expenses", label: "Frais" },
-      ],
-      (id, content) =>
-        id === "summary" ? renderSummary(content) : renderExpenses(content),
-    );
-  else if (pageId === "equipe-rh")
-    tabs(
-      outlet,
-      [
-        { id: "employees", label: "Employés" },
-        { id: "settings", label: "ERP" },
-      ],
-      (id, content) =>
-        id === "employees"
-          ? renderEmployees(content)
-          : renderErpSettings(content),
-    );
-  else
-    tabs(
-      outlet,
-      [
-        { id: "catalogue", label: "Catalogue" },
-        { id: "recipes", label: "Recettes" },
-        { id: "stocks", label: "Stocks" },
-      ],
-      (id, content) =>
-        id === "catalogue"
-          ? renderCatalogue(content)
-          : id === "recipes"
-            ? renderRecipes(content)
-            : renderStocks(content),
-    );
+  mountDirectionTabs(outlet, pageId, {
+    activities: renderActivities,
+    logs: renderLogs,
+    summary: renderSummary,
+    expenses: renderExpenses,
+    employees: renderEmployees,
+    settings: renderErpSettings,
+    catalogue: renderCatalogue,
+    recipes: renderRecipes,
+    stocks: renderStocks
+  });
   return () => undefined;
 }

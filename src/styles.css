@@ -1,24 +1,6 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
-
 :root {
-  color-scheme: light;
-  --color-canvas: #f7f3ed;
-  --color-surface: #fffdf8;
-  --color-surface-muted: #eee9f6;
-  --color-border: #76699e;
-  --color-text: #1a1230;
-  --color-muted: #615b70;
-  --color-brand: #5742a7;
-  --color-brand-strong: #44318d;
-  --color-threshold: #5742a7;
-  --color-accent: #9b5c20;
-  --shadow-panel: 0 18px 45px rgb(57 38 96 / 12%);
-  --canvas-decoration: radial-gradient(circle at 82% 8%, rgb(87 66 167 / 10%), transparent 34%), radial-gradient(circle at 12% 92%, rgb(232 163 97 / 9%), transparent 30%);
-}
-
-[data-theme="dark"] {
   color-scheme: dark;
   --color-canvas: #0a0515;
   --color-surface: #19113c;
@@ -30,8 +12,33 @@
   --color-brand-strong: #6f5bc4;
   --color-threshold: #b4a8ff;
   --color-accent: #e8a361;
+  --color-success: #4ade80;
+  --color-danger: #f87171;
+  --color-warning: #fbbf24;
+  --color-backdrop: rgb(2 6 23 / 70%);
   --shadow-panel: 0 22px 60px rgb(0 0 0 / 46%), 0 0 32px rgb(87 66 167 / 12%);
   --canvas-decoration: radial-gradient(circle at 82% 8%, rgb(87 66 167 / 28%), transparent 36%), radial-gradient(circle at 8% 88%, rgb(111 91 196 / 15%), transparent 32%);
+}
+
+/* Identité de l'ERP historique, reconstruite à partir des écrans de référence. */
+[data-theme="heritage"] {
+  color-scheme: dark;
+  --color-canvas: #18172f;
+  --color-surface: #192541;
+  --color-surface-muted: #123f6b;
+  --color-border: #547aa0;
+  --color-text: #f8f8fb;
+  --color-muted: #c3c5cc;
+  --color-brand: #d63353;
+  --color-brand-strong: #b92745;
+  --color-threshold: #60a5fa;
+  --color-accent: #ff6b84;
+  --color-success: #5fd05f;
+  --color-danger: #ff8294;
+  --color-warning: #ffad32;
+  --color-backdrop: rgb(8 10 25 / 78%);
+  --shadow-panel: 0 18px 34px rgb(3 7 20 / 42%);
+  --canvas-decoration: none;
 }
 
 @theme inline {
@@ -45,6 +52,10 @@
   --color-brand-strong: var(--color-brand-strong);
   --color-threshold: var(--color-threshold);
   --color-accent: var(--color-accent);
+  --color-success: var(--color-success);
+  --color-danger: var(--color-danger);
+  --color-warning: var(--color-warning);
+  --color-backdrop: var(--color-backdrop);
   --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: Cinzel, Georgia, serif;
 }
@@ -60,15 +71,11 @@ h1, h2 { font-family: var(--font-display); letter-spacing: .01em; }
 }
 button, a { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
-.text-green-600 { color: #15803d; }
-[data-theme="dark"] .text-green-600 { color: #4ade80; }
-[data-theme="dark"] .text-red-600 { color: #f87171; }
-[data-theme="dark"] .text-brand { color: var(--color-accent); }
-[data-theme="dark"] .border-brand { border-color: var(--color-accent); }
-
 .app-shell { min-height: 100vh; transition: grid-template-columns 180ms ease; }
 .app-sidebar { transition: transform 180ms ease, visibility 180ms ease; }
 .sidebar-backdrop { transition: opacity 180ms ease, visibility 180ms ease; }
+.theme-switch-icon { transition: transform 180ms ease; }
+[data-theme="heritage"] .theme-switch-icon { transform: rotate(-12deg); }
 
 @media (min-width: 1024px) and (max-width: 1279px) {
   .app-shell[data-sidebar-collapsed="true"] { grid-template-columns: 5rem minmax(0, 1fr); }
@@ -81,6 +88,40 @@ button, a { -webkit-tap-highlight-color: transparent; }
 @media (max-width: 1023px) {
   .app-sidebar[aria-hidden="true"] { transform: translateX(-100%); visibility: hidden; }
   .sidebar-backdrop[aria-hidden="true"] { opacity: 0; visibility: hidden; }
+}
+
+@media (min-width: 1024px) and (min-height: 600px) {
+  .buyback-workspace {
+    height: calc(100dvh - 9rem);
+    grid-template-columns: minmax(0, 3fr) minmax(22rem, 2fr);
+    align-items: stretch;
+  }
+  .buyback-summary {
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .buyback-summary-card { min-height: 0; }
+  .buyback-summary-text { min-height: 0; resize: none; }
+  .buyback-summary-actions { grid-template-columns: minmax(0, 1fr); }
+  .buyback-desktop-list { min-height: 0; max-height: none; flex: 1 1 0%; }
+}
+
+@media (min-width: 1024px) {
+  table thead th { padding-block: .5rem; }
+  table tbody :is(td, th) { padding-block: .25rem; }
+  table tbody button,
+  table tbody select,
+  table tbody textarea,
+  table tbody input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 2rem;
+    padding-block: .2rem;
+    border-radius: .5rem;
+    line-height: 1.25rem;
+  }
+  table tbody button { padding-inline: .625rem; }
+  table tbody input:not([type="checkbox"]):not([type="radio"]),
+  table tbody select,
+  table tbody textarea { padding-inline: .5rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -9,6 +9,8 @@ export async function mountFeature(pageId: string): Promise<void> {
   if (!outlet) return;
   const cleanup = pageId === "caisse"
     ? await (await import("./caisse/page")).mountCaissePage(outlet)
+    : ["permis-balais", "permis-voiture", "permis-moto"].includes(pageId)
+      ? await (await import("./permits/page")).mountPermitPage(outlet, pageId)
     : ["pilotage", "finances", "equipe-rh", "offre-stocks"].includes(pageId)
       ? await (await import("./direction/page")).mountDirectionPage(outlet, pageId)
     : await (await import("./operations/page")).mountOperationsPage(outlet, pageId);

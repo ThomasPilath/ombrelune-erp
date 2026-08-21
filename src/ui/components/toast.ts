@@ -1,8 +1,8 @@
 type ToastKind = "success" | "error" | "info";
 
 const colors: Record<ToastKind, string> = {
-  success: "border-green-600",
-  error: "border-red-600",
+  success: "border-success",
+  error: "border-danger",
   info: "border-accent"
 };
 

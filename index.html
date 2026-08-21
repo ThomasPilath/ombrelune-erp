@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="elixir" style="background-color:#0a0515;color:#fff">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,13 +10,11 @@
   <title>Ombrelune</title>
   <script>
     (() => {
-      const savedTheme = localStorage.getItem("ombrelune-theme");
-      const theme = savedTheme === "light" || savedTheme === "dark"
-        ? savedTheme
-        : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      document.documentElement.dataset.theme = theme;
-      document.documentElement.style.backgroundColor = theme === "dark" ? "#0a0515" : "#f7f3ed";
-      document.documentElement.style.color = theme === "dark" ? "#ffffff" : "#1a1230";
+      const theme = localStorage.getItem("ombrelune-visual-theme");
+      if (theme === "heritage") {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.backgroundColor = "#18172f";
+      }
     })();
   </script>
 </head>
