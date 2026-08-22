@@ -10,7 +10,10 @@
   <title>Ombrelune</title>
   <script>
     (() => {
-      const theme = localStorage.getItem("ombrelune-visual-theme");
+      const savedTheme = localStorage.getItem("ombrelune-visual-theme");
+      const theme = savedTheme === "elixir" || savedTheme === "heritage"
+        ? savedTheme
+        : matchMedia("(prefers-color-scheme: dark)").matches ? "heritage" : "elixir";
       if (theme === "heritage") {
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.backgroundColor = "#18172f";

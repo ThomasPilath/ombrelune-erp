@@ -36,23 +36,6 @@ export class CraftPlanner {
     this.render();
   }
 
-  selectProduct(productId: string, craftCount = 1): boolean {
-    if (!this.products().some(([id]) => id === productId)) return false;
-    const existing = this.selections.find(selection => selection.productId === productId);
-    if (existing) existing.craftCount = Math.max(1, Math.trunc(craftCount));
-    else {
-      const maxItems = this.options.maxItems ?? 3;
-      if (this.selections.length >= maxItems) {
-        showToast(`Retirez une fabrication avant d’en ajouter une nouvelle (maximum ${maxItems}).`, "error");
-        return false;
-      }
-      this.selections.push({ productId, craftCount: Math.max(1, Math.trunc(craftCount)) });
-    }
-    this.completed.delete(productId);
-    this.render();
-    return true;
-  }
-
   loadProduct(productId: string, craftCount = 1): boolean {
     if (!this.products().some(([id]) => id === productId)) return false;
     const previousProductId = this.selections[0]?.productId;

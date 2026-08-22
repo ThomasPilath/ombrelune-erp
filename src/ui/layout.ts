@@ -5,7 +5,6 @@ import { keepFocusInside, lockDocumentScroll } from "./focus";
 
 const groupLabels: Record<PageGroup, string> = {
   operations: "Opérations",
-  gestion: "Gestion",
   permis: "Permis",
   direction: "Direction"
 };

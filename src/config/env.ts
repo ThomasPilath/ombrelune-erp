@@ -28,8 +28,12 @@ declare global {
 
 export type PublicEnv = z.infer<typeof publicEnvSchema>;
 
+export function parsePublicEnv(value: unknown): PublicEnv {
+  return publicEnvSchema.parse(value);
+}
+
 export function getPublicEnv(): PublicEnv {
-  return publicEnvSchema.parse({
+  return parsePublicEnv({
     ...import.meta.env,
     ...window.__OMBRELUNE_CONFIG__
   });

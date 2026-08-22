@@ -1,4 +1,4 @@
-export type PageGroup = "operations" | "gestion" | "permis" | "direction";
+export type PageGroup = "operations" | "permis" | "direction";
 
 export interface PageDefinition {
   id: string;

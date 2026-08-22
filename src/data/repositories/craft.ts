@@ -41,6 +41,8 @@ export interface CraftStockNeed {
   maximum: number | null;
   missing: number;
   craftCount: number;
+  craftableQuantity: number;
+  partiallyAvailable: boolean;
   resourceUnavailable: boolean;
 }
 
@@ -60,8 +62,14 @@ export function craftStockNeeds(recipes: RecipeRow[]): CraftStockNeed[] {
     const minimum = stock?.stock_min ?? 0;
     const maximum = stock?.stock_max ?? null;
     if (current >= minimum) return;
-    const missing = minimum - current;
+    const target = maximum ?? minimum;
+    const missing = Math.max(0, target - current);
     const craftCount = Math.ceil(missing / recipe.quantite_produite);
+    const availableCrafts = Math.min(...productRecipes.map(line =>
+      Math.floor(ingredientStock(line) / line.quantite_requise)
+    ));
+    const possibleCrafts = Math.min(craftCount, availableCrafts);
+    const craftableQuantity = Math.min(missing, possibleCrafts * recipe.quantite_produite);
     products.set(productId, {
       productId,
       article: recipe.produit.article,
@@ -70,7 +78,9 @@ export function craftStockNeeds(recipes: RecipeRow[]): CraftStockNeed[] {
       maximum,
       missing,
       craftCount,
-      resourceUnavailable: productRecipes.some(line => ingredientStock(line) < line.quantite_requise * craftCount)
+      craftableQuantity,
+      partiallyAvailable: availableCrafts > 0 && availableCrafts < craftCount,
+      resourceUnavailable: availableCrafts === 0
     });
   });
   return [...products.values()].sort((left, right) => left.article.localeCompare(right.article, "fr"));

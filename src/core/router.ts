@@ -15,13 +15,17 @@ function isInternalNavigation(event: MouseEvent, anchor: HTMLAnchorElement): boo
 
 export function startRouter(render: RouteHandler): void {
   let navigationId = 0;
+  let renderQueue = Promise.resolve();
 
-  const renderPath = async (pathname: string): Promise<void> => {
+  const renderPath = (pathname: string): void => {
     const currentNavigation = ++navigationId;
-    const page = getPageFromPath(pathname);
-    if (currentNavigation !== navigationId) return;
-    await render(page);
-    window.scrollTo({ top: 0, behavior: "auto" });
+    renderQueue = renderQueue.catch(() => undefined).then(async () => {
+      if (currentNavigation !== navigationId) return;
+      await render(getPageFromPath(pathname));
+      if (currentNavigation === navigationId) {
+        window.scrollTo({ top: 0, behavior: "auto" });
+      }
+    });
   };
 
   document.addEventListener("click", event => {
@@ -32,14 +36,14 @@ export function startRouter(render: RouteHandler): void {
     if (target.pathname === location.pathname && target.search === location.search) return;
     event.preventDefault();
     history.pushState(null, "", `${target.pathname}${target.search}${target.hash}`);
-    void renderPath(target.pathname);
+    renderPath(target.pathname);
   });
 
-  window.addEventListener("popstate", () => void renderPath(location.pathname));
+  window.addEventListener("popstate", () => renderPath(location.pathname));
 
   const initialPage = getPageFromPath(location.pathname);
   if (location.pathname === "/" || location.pathname === "/index.html") {
     history.replaceState(null, "", initialPage.href);
   }
-  void renderPath(initialPage.href);
+  renderPath(initialPage.href);
 }

@@ -19,11 +19,6 @@ export function setTheme(theme: VisualTheme, persist = true): void {
 
 export function applyInitialTheme(): void {
   const savedTheme = localStorage.getItem(storageKey);
-  setTheme(isVisualTheme(savedTheme) ? savedTheme : "heritage", false);
-}
-
-export function toggleTheme(): VisualTheme {
-  const nextTheme = currentTheme() === "elixir" ? "heritage" : "elixir";
-  setTheme(nextTheme);
-  return nextTheme;
+  const preferredTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "heritage" : "elixir";
+  setTheme(isVisualTheme(savedTheme) ? savedTheme : preferredTheme, false);
 }
