@@ -13,6 +13,7 @@ const groupLabels: Record<PageGroup, string> = {
 function navigation(current: PageDefinition): string {
   return (Object.keys(groupLabels) as PageGroup[]).map(group => {
     const links = pages.filter(page => page.group === group && page.id !== "dashboard");
+    if (!links.length) return "";
     return `<section data-nav-group="${group}" ${group === "direction" && !hasDirectionAccess() ? "hidden" : ""} class="mb-6" aria-labelledby="nav-${group}">
       <h2 id="nav-${group}" class="sidebar-collapsible mb-2 px-3 text-[.7rem] font-bold uppercase tracking-[.18em] text-muted">${groupLabels[group]}</h2>
       <ul class="space-y-1">${links.map(page => `<li><a href="${page.href}" title="${page.title}" aria-label="${page.title}" ${page.id === current.id ? 'aria-current="page"' : ""} class="flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium ${page.id === current.id ? "bg-brand text-white shadow-sm" : "text-muted hover:bg-surface-muted hover:text-ink"}">${icon(page.icon, "size-[1.15rem] shrink-0")}<span class="sidebar-collapsible">${page.title}</span></a></li>`).join("")}</ul>

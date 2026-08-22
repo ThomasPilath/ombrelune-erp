@@ -1,5 +1,5 @@
 import type { CatalogueRow, ClientRow } from "../../data/schemas";
-import { checkout, checkoutEmployee, getClientPermit, getEmployeeCosts, getPreparedOrders, getSellableCatalogue, getTicketCount, searchClients, type BasketLine, type PermitWithdrawal, type PreparedOrder } from "../../data/repositories/pos";
+import { checkout, checkoutEmployee, getClientPermit, getEmployeeCosts, getPreparedOrders, getSellableCatalogue, getTicketCount, orderToBasketStorageKey, searchClients, type BasketLine, type PermitWithdrawal, type PreparedOrder } from "../../data/repositories/pos";
 import { asyncState, bindRetry } from "../../ui/components/async-state";
 import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
@@ -46,6 +46,8 @@ class CashRegister {
   private isEmployeePurchase = false;
   private craftableQuantities = new Map<string, number>();
   private basket = new Map<string, number>();
+  private orderGroups = new Map<string, PreparedOrder>();
+  private packGroups = new Map<string, { label: string; articleIds: string[] }>();
   private basketOpen = false;
   private query = "";
   private ticketClient: ClientRow | null = null;
@@ -64,18 +66,43 @@ class CashRegister {
       this.preparedOrders = preparedOrders;
       this.employeeCosts = await getEmployeeCosts(catalogue.map(article => article.id));
       this.updateCraftability(recipes);
-      if (!this.destroyed) this.render();
+      if (!this.destroyed) {
+        this.render();
+        const pendingOrderId = sessionStorage.getItem(orderToBasketStorageKey);
+        if (pendingOrderId) {
+          sessionStorage.removeItem(orderToBasketStorageKey);
+          await this.addPreparedOrder(pendingOrderId);
+          this.setBasketOpen(true);
+        }
+      }
     }
     catch (error) { this.outlet.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined, "Réessayer"); bindRetry(this.outlet, () => void this.mount()); }
   }
   destroy(): void { this.destroyed = true; document.removeEventListener("keydown", this.handleKeydown); lockDocumentScroll(false); }
   private article(id: string): CatalogueRow | undefined { return this.catalogue.find(row => String(row.id) === id); }
-  private ticketQuantity(): number { return [...this.basket].reduce((n, [id, q]) => n + (this.article(id)?.type_article === "ticket" ? q : 0), 0); }
-  private permitLines(): CatalogueRow[] { return [...this.basket.keys()].map(id => this.article(id)).filter((row): row is CatalogueRow => row?.type_article === "document_permis"); }
+  private groupedQuantity(articleId: string): number {
+    return [...this.orderGroups.values()].reduce(
+      (sum, order) => sum + order.lines.reduce(
+        (orderSum, line) => orderSum + (String(line.article_id) === articleId ? line.quantite : 0),
+        0,
+      ),
+      0,
+    );
+  }
+  private checkoutQuantities(): Map<string, number> {
+    const quantities = new Map(this.basket);
+    this.orderGroups.forEach(order => order.lines.forEach(line => {
+      const id = String(line.article_id);
+      quantities.set(id, (quantities.get(id) ?? 0) + line.quantite);
+    }));
+    return quantities;
+  }
+  private ticketQuantity(): number { return [...this.checkoutQuantities()].reduce((n, [id, q]) => n + (this.article(id)?.type_article === "ticket" ? q : 0), 0); }
+  private permitLines(): CatalogueRow[] { return [...this.checkoutQuantities().keys()].map(id => this.article(id)).filter((row): row is CatalogueRow => row?.type_article === "document_permis"); }
   private unitPrice(article: CatalogueRow): number { return this.isEmployeePurchase ? (this.employeeCosts.get(String(article.id)) ?? 0) : (article.prix_vente ?? 0); }
-  private total(): number { return [...this.basket].reduce((sum, [id, q]) => sum + (this.article(id) ? this.unitPrice(this.article(id)!) : 0) * q, 0); }
-  private basketQuantity(): number { return [...this.basket.values()].reduce((sum, quantity) => sum + quantity, 0); }
-  private canCheckout(): boolean { return this.basket.size > 0; }
+  private total(): number { return [...this.checkoutQuantities()].reduce((sum, [id, q]) => sum + (this.article(id) ? this.unitPrice(this.article(id)!) : 0) * q, 0); }
+  private basketQuantity(): number { return [...this.checkoutQuantities().values()].reduce((sum, quantity) => sum + quantity, 0); }
+  private canCheckout(): boolean { return this.basket.size > 0 || this.orderGroups.size > 0; }
   private assignedPermits(articleId: string): number { return this.permitWithdrawals.filter(item => String(item.article_id) === articleId).length; }
   private updateCraftability(recipes: RecipeRow[]): void {
     this.craftableQuantities.clear();
@@ -89,14 +116,14 @@ class CashRegister {
       this.craftableQuantities.set(productId, possibleCrafts * lines[0]!.quantite_produite);
     });
   }
-  private shortages(): Array<[CatalogueRow, number]> { return [...this.basket].map(([id, quantity]) => [this.article(id)!, Math.max(0, quantity - stockOf(this.article(id)!))] as [CatalogueRow, number]).filter(([article, shortage]) => !isCompassSupplement(article.article) && shortage > 0); }
+  private shortages(): Array<[CatalogueRow, number]> { return [...this.checkoutQuantities()].map(([id, quantity]) => [this.article(id)!, Math.max(0, quantity - stockOf(this.article(id)!))] as [CatalogueRow, number]).filter(([article, shortage]) => !isCompassSupplement(article.article) && shortage > 0); }
   private maximumQuantity(row: CatalogueRow): number {
     if (row.type_article === "ticket") return Math.min(2, stockOf(row));
     if (row.type_article === "document_permis") return Math.min(1, stockOf(row) + (this.craftableQuantities.get(String(row.id)) ?? 0));
     return stockOf(row) + (this.craftableQuantities.get(String(row.id)) ?? 0);
   }
   private remainingCraftableQuantity(row: CatalogueRow): number {
-    const reservedForCraft = Math.max(0, (this.basket.get(String(row.id)) ?? 0) - stockOf(row));
+    const reservedForCraft = Math.max(0, (this.checkoutQuantities().get(String(row.id)) ?? 0) - stockOf(row));
     return Math.max(0, (this.craftableQuantities.get(String(row.id)) ?? 0) - reservedForCraft);
   }
 
@@ -114,7 +141,7 @@ class CashRegister {
     this.outlet.innerHTML = `<section class="grid h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)] lg:h-[calc(100dvh-9rem)] lg:min-h-[38rem] lg:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)]">
       <div id="catalogue-panel" class="flex min-h-0 min-w-0 flex-col lg:border-r"><div class="grid shrink-0 gap-3 border-b p-4 sm:grid-cols-[minmax(0,1fr)_14rem]"><input id="article-search" type="search" value="${escapeHtml(this.query)}" placeholder="Rechercher un article…" aria-label="Rechercher un article" aria-controls="article-list" class="min-h-12 w-full rounded-xl border bg-surface px-4"><label><span class="sr-only">Ajout rapide au panier</span><select id="quick-add-select" class="min-h-12 w-full rounded-xl border bg-surface px-4 font-bold"><option value="">Ajout rapide…</option><optgroup label="Packs">${articlePacks.map(pack => `<option value="pack:${escapeHtml(pack.id)}">${escapeHtml(pack.label)}</option>`).join("")}</optgroup>${this.preparedOrders.length ? `<optgroup label="Commandes préparées">${this.preparedOrders.map(order => `<option value="order:${escapeHtml(order.id)}">${escapeHtml(order.clientName)}</option>`).join("")}</optgroup>` : ""}</select></label></div><div id="article-list" class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24 lg:pb-0" aria-live="polite">${articles.length ? articles.map(row => this.articleRow(row)).join("") : '<p class="p-8 text-center text-muted">Aucun article trouvé.</p>'}</div></div>
       <button id="basket-backdrop" type="button" class="fixed inset-0 z-30 bg-backdrop lg:hidden" aria-label="Fermer le panier"></button>
-      <div id="basket-panel" role="dialog" aria-modal="true" aria-labelledby="basket-title" class="fixed inset-x-0 bottom-0 z-40 flex max-h-[78dvh] min-h-0 min-w-0 flex-col rounded-t-2xl border bg-surface shadow-2xl transition-transform duration-200 motion-reduce:transition-none lg:visible lg:pointer-events-auto lg:static lg:z-auto lg:max-h-none lg:min-h-[32rem] lg:translate-y-0 lg:rounded-none lg:border-0 lg:shadow-none"><div class="relative flex shrink-0 flex-wrap items-start justify-between gap-4 border-b p-4 pr-16 lg:pr-4"><div><h2 id="basket-title" class="text-xl font-bold">Panier</h2><p id="basket-summary" class="text-sm text-muted"></p></div><label class="flex min-h-11 items-center gap-3 rounded-xl border px-3 font-bold has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"><input id="employee-purchase" type="checkbox" ${this.isEmployeePurchase ? "checked" : ""} ${this.permitLines().length ? "disabled" : ""} class="size-5 accent-[var(--color-brand)]"><span>Achat employé</span></label><button id="close-basket" type="button" class="absolute right-4 top-4 grid size-11 place-items-center rounded-xl border lg:hidden" aria-label="Fermer le panier">×</button></div><div id="basket-lines" class="min-h-0 flex-1 overflow-y-auto overscroll-contain"></div>
+      <div id="basket-panel" role="dialog" aria-modal="true" aria-labelledby="basket-title" class="fixed inset-x-0 bottom-0 z-40 flex max-h-[78dvh] min-h-0 min-w-0 flex-col rounded-t-2xl border bg-surface shadow-2xl transition-transform duration-200 motion-reduce:transition-none lg:visible lg:pointer-events-auto lg:static lg:z-auto lg:max-h-none lg:min-h-[32rem] lg:translate-y-0 lg:rounded-none lg:border-0 lg:shadow-none"><div class="relative flex shrink-0 flex-wrap items-start justify-between gap-4 border-b p-4 pr-16 lg:pr-4"><div><h2 id="basket-title" class="text-xl font-bold">Panier</h2><p id="basket-summary" class="text-sm text-muted"></p></div><label class="flex min-h-11 items-center gap-3 rounded-xl border px-3 font-bold has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"><input id="employee-purchase" type="checkbox" ${this.isEmployeePurchase ? "checked" : ""} ${this.permitLines().length || this.orderGroups.size ? "disabled" : ""} class="size-5 accent-[var(--color-brand)]"><span>Achat employé</span></label><button id="close-basket" type="button" class="absolute right-4 top-4 grid size-11 place-items-center rounded-xl border lg:hidden" aria-label="Fermer le panier">×</button></div><div id="basket-lines" class="min-h-0 flex-1 overflow-y-auto overscroll-contain"></div>
       <div id="basket-actions" class="mt-auto shrink-0 border-t bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"></div></div>
     </section>${clientDialog("ticket-dialog", "Bénéficiaire des tickets")}<dialog id="craft-dialog" class="m-auto max-h-[calc(100%-2rem)] w-[min(48rem,calc(100%-2rem))] overflow-y-auto rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop"><div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-surface p-5"><div><h2 class="text-xl font-bold">Fabrications nécessaires</h2><p class="mt-1 text-sm text-muted">Fabriquez les articles manquants avant de valider le panier.</p></div><button type="button" data-close class="grid size-11 place-items-center rounded-xl border" aria-label="Fermer">×</button></div><div id="cash-craft-planner" class="p-5"></div></dialog>`;
     this.outlet.insertAdjacentHTML("beforeend", `<button id="open-basket" type="button" class="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-20 flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-brand px-5 font-bold text-white shadow-xl lg:hidden" aria-controls="basket-panel"><span id="mobile-basket-count"></span><span id="mobile-basket-total"></span></button>`);
@@ -126,13 +153,32 @@ class CashRegister {
   private articleRow(row: CatalogueRow): string {
     const stock = stockOf(row);
     const craftableNow = this.remainingCraftableQuantity(row) > 0;
-    const unavailable = (this.basket.get(String(row.id)) ?? 0) >= this.maximumQuantity(row);
+    const unavailable = (this.checkoutQuantities().get(String(row.id)) ?? 0) >= this.maximumQuantity(row);
     return `<button data-add="${escapeHtml(row.id)}" ${unavailable ? "disabled" : ""} class="grid min-h-12 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b px-4 py-2 text-left hover:bg-surface-muted disabled:opacity-45 sm:grid-cols-[minmax(0,1fr)_8rem_9rem] sm:gap-x-6 ${!stock && craftableNow ? "border-l-2 border-l-accent bg-accent/5" : ""}"><strong class="truncate">${escapeHtml(row.article)}</strong><span class="row-start-2 text-right text-sm ${!stock && craftableNow ? "font-bold text-accent" : "text-muted"} sm:row-start-auto">${stock ? `Stock : ${stock}` : "Rupture"}</span><span class="row-span-2 text-right font-bold sm:row-span-1">${money.format(this.unitPrice(row))} PO${this.isEmployeePurchase ? '<small class="block font-normal text-muted">prix coûtant</small>' : ""}</span></button>`;
   }
   private basketRow(row: CatalogueRow, quantity: number): string {
     const price = this.unitPrice(row);
     if (isCompassSupplement(row.article)) return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><div><strong>${escapeHtml(row.article)}</strong><p class="mt-1 text-sm text-muted">Ajout automatique — ${escapeHtml(compassDecisionLabel(true))}</p></div><span>${money.format(price)} PO</span></div><div class="mt-3 flex items-center justify-between"><span class="rounded-lg bg-surface-muted px-3 py-2 text-sm font-bold">Quantité liée : ${quantity}</span><strong>${money.format(price * quantity)} PO</strong></div></div>`;
-    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex flex-wrap items-center justify-between gap-3"><div class="inline-grid grid-cols-5 overflow-hidden rounded-xl border"><button data-remove class="grid size-11 place-items-center border-r font-bold text-danger" aria-label="Retirer ${escapeHtml(row.article)} du panier" title="Retirer du panier">${icon("trash", "size-5")}</button><button data-minus class="size-11 font-bold" aria-label="Retirer une unité">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" aria-label="Ajouter une unité" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+</button><button data-plus-ten class="size-11 border-l text-sm font-bold" aria-label="Ajouter dix unités" ${quantity >= this.maximumQuantity(row) ? "disabled" : ""}>+10</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-warning">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
+    const maximumFreeQuantity = Math.max(0, this.maximumQuantity(row) - this.groupedQuantity(String(row.id)));
+    return `<div class="border-b p-4" data-line="${escapeHtml(row.id)}"><div class="flex justify-between gap-4"><strong>${escapeHtml(row.article)}</strong><span>${money.format(price)} PO</span></div><div class="mt-3 flex flex-wrap items-center justify-between gap-3"><div class="inline-grid grid-cols-5 overflow-hidden rounded-xl border"><button data-remove class="grid size-11 place-items-center border-r font-bold text-danger" aria-label="Retirer ${escapeHtml(row.article)} du panier" title="Retirer du panier">${icon("trash", "size-5")}</button><button data-minus class="size-11 font-bold" aria-label="Retirer une unité">−</button><input data-quantity value="${quantity}" inputmode="numeric" class="size-11 border-x bg-surface text-center font-bold" aria-label="Quantité"><button data-plus class="size-11 font-bold" aria-label="Ajouter une unité" ${quantity >= maximumFreeQuantity ? "disabled" : ""}>+</button><button data-plus-ten class="size-11 border-l text-sm font-bold" aria-label="Ajouter dix unités" ${quantity >= maximumFreeQuantity ? "disabled" : ""}>+10</button></div><strong>${money.format(price * quantity)} PO</strong></div>${!this.isEmployeePurchase && row.type_article === "document_permis" ? `<p class="mt-2 text-sm text-muted">${this.assignedPermits(String(row.id))}/${quantity} bénéficiaire(s) associé(s) — complété lors de la validation</p>` : ""}${quantity > stockOf(row) ? `<p class="mt-2 text-sm text-warning">${quantity - stockOf(row)} unité(s) à fabriquer</p>` : ""}</div>`;
+  }
+
+  private orderGroupHtml(order: PreparedOrder): string {
+    const total = order.lines.reduce((sum, line) => {
+      const article = this.article(String(line.article_id));
+      return sum + (article ? this.unitPrice(article) * line.quantite : 0);
+    }, 0);
+    return `<section data-order-group="${escapeHtml(order.id)}" class="border-y-2 border-accent bg-accent/5"><div class="flex items-center justify-between gap-3 border-b border-accent/40 px-4 py-3"><strong>Commande : ${escapeHtml(order.clientName)}</strong><button type="button" data-remove-order-group="${escapeHtml(order.id)}" class="grid size-10 place-items-center rounded-lg border border-danger text-danger" aria-label="Retirer toute la commande de ${escapeHtml(order.clientName)}" title="Retirer toute la commande">${icon("trash", "size-5")}</button></div><ul class="divide-y">${order.lines.map(line => { const article = this.article(String(line.article_id)); if (!article) return ""; return `<li class="flex items-center justify-between gap-4 px-4 py-2"><span>${escapeHtml(article.article)} <strong>× ${line.quantite}</strong></span><span class="shrink-0 font-bold">${money.format(this.unitPrice(article) * line.quantite)} PO</span></li>`; }).join("")}</ul><div class="flex justify-between border-t border-accent/40 px-4 py-2 text-sm"><span class="text-muted">Quantités verrouillées</span><strong>${money.format(total)} PO</strong></div></section>`;
+  }
+
+  private packGroupHtml(pack: { label: string; articleIds: string[] }): string {
+    const rows = pack.articleIds.flatMap(id => {
+      const article = this.article(id);
+      const quantity = this.basket.get(id) ?? 0;
+      return article && quantity ? [this.basketRow(article, quantity)] : [];
+    });
+    if (!rows.length) return "";
+    return `<section class="border-y-2"><div class="bg-surface-muted px-4 py-2 text-sm font-bold">${escapeHtml(pack.label)}</div>${rows.join("")}</section>`;
   }
 
   private bind(): void {
@@ -196,13 +242,25 @@ class CashRegister {
     const lines = this.outlet.querySelector<HTMLElement>("#basket-lines");
     const actions = this.outlet.querySelector<HTMLElement>("#basket-actions");
     if (!summary || !lines || !actions) return;
-    summary.textContent = this.basket.size ? `${this.basket.size} article(s) distinct(s)` : "Ajoutez un article depuis la liste.";
-    lines.innerHTML = this.basket.size ? [...this.basket].map(([id, q]) => this.basketRow(this.article(id)!, q)).join("") : '<p class="p-8 text-center text-muted">Le panier est vide.</p>';
+    summary.textContent = this.canCheckout() ? `${this.basketQuantity()} article(s)${this.orderGroups.size ? ` · ${this.orderGroups.size} commande(s)` : ""}` : "Ajoutez un article depuis la liste.";
+    const groupedLines = [...this.orderGroups.values()].map(order => this.orderGroupHtml(order)).join("");
+    const packedArticleIds = new Set([...this.packGroups.values()].flatMap(pack => pack.articleIds));
+    const packedLines = [...this.packGroups.values()].map(pack => this.packGroupHtml(pack)).join("");
+    const freeLines = [...this.basket].filter(([id]) => !packedArticleIds.has(id)).map(([id, q]) => this.basketRow(this.article(id)!, q)).join("");
+    lines.innerHTML = this.canCheckout() ? `${groupedLines}${packedLines}${freeLines}` : '<p class="p-8 text-center text-muted">Le panier est vide.</p>';
     actions.innerHTML = `<div class="mb-4 flex items-baseline justify-between"><strong>${this.isEmployeePurchase ? "Total à rembourser" : "Total"}</strong><strong class="text-2xl">${money.format(this.total())} PO</strong></div>${this.ticketQuantity() ? `<p class="mb-3 text-sm text-muted">${this.ticketAuthorized ? `Bénéficiaire des tickets : ${escapeHtml(this.ticketClient?.nom_prenom ?? "vérifié")}.` : "Le bénéficiaire des tickets sera vérifié lors de la validation."}</p>` : ""}<div class="grid grid-cols-1 gap-3 sm:grid-cols-2"><button id="craft-action" ${this.shortages().length ? "" : "disabled"} class="min-h-12 rounded-xl border border-accent font-bold text-accent disabled:opacity-40">Craft</button><button id="checkout" ${this.canCheckout() && !this.shortages().length && !this.submitting ? "" : "disabled"} class="min-h-12 rounded-xl bg-brand font-bold text-white disabled:opacity-40">${this.isEmployeePurchase ? "Valider l’achat" : "Valider"}</button></div>`;
     const quantity = this.basketQuantity();
     this.outlet.querySelector<HTMLElement>("#mobile-basket-count")!.textContent = `Panier (${quantity} article${quantity > 1 ? "s" : ""})`;
     this.outlet.querySelector<HTMLElement>("#mobile-basket-total")!.textContent = `${money.format(this.total())} PO`;
     this.outlet.querySelectorAll<HTMLElement>("[data-line]").forEach(el => { const id = el.dataset.line!; const remove = el.querySelector<HTMLElement>("[data-remove]"); const minus = el.querySelector<HTMLElement>("[data-minus]"); const plus = el.querySelector<HTMLElement>("[data-plus]"); const plusTen = el.querySelector<HTMLElement>("[data-plus-ten]"); const quantity = el.querySelector<HTMLInputElement>("[data-quantity]"); remove?.addEventListener("click", () => this.setQuantity(id, 0)); minus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 1) - 1)); plus?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 1)); plusTen?.addEventListener("click", () => this.setQuantity(id, (this.basket.get(id) ?? 0) + 10)); quantity?.addEventListener("change", event => this.setQuantity(id, Number((event.currentTarget as HTMLInputElement).value))); });
+    this.outlet.querySelectorAll<HTMLButtonElement>("[data-remove-order-group]").forEach(button => button.addEventListener("click", () => {
+      this.orderGroups.delete(button.dataset.removeOrderGroup!);
+      this.permitWithdrawals = [];
+      this.ticketClient = null;
+      this.ticketAuthorized = false;
+      this.renderArticleList();
+      this.renderBasket();
+    }));
     this.outlet.querySelector("#craft-action")!.addEventListener("click", () => void this.openCraftDialog());
     this.outlet.querySelector<HTMLButtonElement>("#checkout")!.addEventListener("click", event => void withPending(event.currentTarget as HTMLButtonElement, "Validation…", () => this.submit()));
   }
@@ -229,13 +287,39 @@ class CashRegister {
       return;
     }
     const added = await this.addQuickLines(resolved.map(line => ({ article_id: line.article!.id, quantite: line.item.quantity })), pack.label);
-    if (added) showToast(`${pack.label} ajouté au panier.`, "success");
+    if (added) {
+      this.packGroups.set(pack.id, { label: pack.label, articleIds: resolved.map(line => String(line.article!.id)) });
+      this.renderBasket();
+      showToast(`${pack.label} ajouté au panier.`, "success");
+    }
   }
   private async addPreparedOrder(orderId: string): Promise<void> {
     const order = this.preparedOrders.find(candidate => String(candidate.id) === orderId);
     if (!order) return;
-    const added = await this.addQuickLines(order.lines, `la commande de ${order.clientName}`);
-    if (added) showToast(`Commande de ${order.clientName} ajoutée au panier.`, "success");
+    if (this.orderGroups.has(String(order.id))) {
+      showToast(`La commande de ${order.clientName} est déjà dans le panier.`, "error");
+      return;
+    }
+    const resolved = order.lines.map(line => ({ line, article: this.article(String(line.article_id)) }));
+    const missing = resolved.filter(item => !item.article).map(item => `#${item.line.article_id}`);
+    if (missing.length) {
+      showToast(`Impossible d’ajouter la commande : article(s) indisponible(s) ${missing.join(", ")}.`, "error");
+      return;
+    }
+    const current = this.checkoutQuantities();
+    const unavailable = resolved.flatMap(({ line, article }) => (current.get(String(article!.id)) ?? 0) + line.quantite > this.maximumQuantity(article!) ? [article!.article] : []);
+    if (unavailable.length) {
+      showToast(`Stock insuffisant pour ajouter la commande : ${unavailable.join(", ")}.`, "error");
+      return;
+    }
+    for (const { article } of resolved) {
+      const id = String(article!.id);
+      if (isContractBook(article!.article) && !current.has(id) && !await confirmGuildCard()) return;
+    }
+    this.isEmployeePurchase = false;
+    this.orderGroups.set(String(order.id), order);
+    this.render();
+    showToast(`Commande de ${order.clientName} ajoutée au panier.`, "success");
   }
   private async addQuickLines(lines: BasketLine[], label: string): Promise<boolean> {
     const resolved = lines.map(line => ({ line, article: this.article(String(line.article_id)) }));
@@ -246,7 +330,7 @@ class CashRegister {
     }
     const unavailable = resolved.flatMap(item => {
       const article = item.article!;
-      const requested = (this.basket.get(String(article.id)) ?? 0) + item.line.quantite;
+      const requested = (this.checkoutQuantities().get(String(article.id)) ?? 0) + item.line.quantite;
       return requested > this.maximumQuantity(article) ? [article.article] : [];
     });
     if (unavailable.length) {
@@ -268,9 +352,14 @@ class CashRegister {
   private setQuantity(id: string, requested: number): void {
     const row = this.article(id); if (!row) return;
     if (isCompassSupplement(row.article)) return;
-    const maximum = this.maximumQuantity(row);
+    const maximum = Math.max(0, this.maximumQuantity(row) - this.groupedQuantity(id));
     const quantity = Math.max(0, Math.min(Number.isFinite(requested) ? Math.trunc(requested) : 0, maximum));
-    if (!quantity) { this.basket.delete(id); } else this.basket.set(id, quantity);
+    if (!quantity) {
+      this.basket.delete(id);
+      this.packGroups.forEach((pack, packId) => {
+        if (pack.articleIds.every(articleId => !this.basket.has(articleId))) this.packGroups.delete(packId);
+      });
+    } else this.basket.set(id, quantity);
     if (row.type_article === "document_permis") {
       this.isEmployeePurchase = false;
       const retained = this.permitWithdrawals.filter(item => String(item.article_id) !== id);
@@ -367,7 +456,7 @@ class CashRegister {
 
   private async ensurePermitBeneficiaries(): Promise<boolean> {
     for (const article of this.permitLines().sort((left, right) => left.article.localeCompare(right.article, "fr"))) {
-      const quantity = this.basket.get(String(article.id)) ?? 0;
+      const quantity = this.checkoutQuantities().get(String(article.id)) ?? 0;
       while (this.assignedPermits(String(article.id)) < quantity) {
         const withdrawal = await this.selectPermitBeneficiary(article, this.assignedPermits(String(article.id)) + 1, quantity);
         if (!withdrawal) return false;
@@ -382,8 +471,9 @@ class CashRegister {
     if (this.ticketQuantity() && !this.ticketAuthorized && !await this.openTicketDialog()) { this.renderBasket(); return; }
     if (!this.isEmployeePurchase && !await this.ensurePermitBeneficiaries()) { this.renderBasket(); return; }
     this.submitting = true;
-    const lines = [...this.basket].map(([article_id, quantite]) => ({ article_id, quantite }));
-    try { const employeePurchase = this.isEmployeePurchase; const total = employeePurchase ? await checkoutEmployee(lines, this.ticketClient?.id ?? null) : await checkout(lines, this.ticketClient?.id ?? null, this.permitWithdrawals); showToast(`${employeePurchase ? "Achat employé" : "Vente"} enregistré : ${money.format(total)} PO.`, "success"); this.basket.clear(); this.isEmployeePurchase = false; this.compassWithSupplement = null; this.ticketClient = null; this.ticketAuthorized = false; this.permitWithdrawals = []; this.catalogue = await getSellableCatalogue(); this.render(); }
+    const lines = [...this.checkoutQuantities()].map(([article_id, quantite]) => ({ article_id, quantite }));
+    const orderIds = [...this.orderGroups.values()].map(order => order.id);
+    try { const employeePurchase = this.isEmployeePurchase; const total = employeePurchase ? await checkoutEmployee(lines, this.ticketClient?.id ?? null) : await checkout(lines, this.ticketClient?.id ?? null, this.permitWithdrawals, orderIds); showToast(`${employeePurchase ? "Achat employé" : "Vente"} enregistré : ${money.format(total)} PO.`, "success"); this.basket.clear(); this.orderGroups.clear(); this.packGroups.clear(); this.isEmployeePurchase = false; this.compassWithSupplement = null; this.ticketClient = null; this.ticketAuthorized = false; this.permitWithdrawals = []; [this.catalogue, this.preparedOrders] = await Promise.all([getSellableCatalogue(), getPreparedOrders()]); this.render(); }
     catch (error) { showToast(error instanceof Error ? error.message : "L’opération a échoué.", "error"); }
     finally { this.submitting = false; }
   }

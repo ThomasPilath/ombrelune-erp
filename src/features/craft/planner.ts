@@ -53,6 +53,19 @@ export class CraftPlanner {
     return true;
   }
 
+  loadProduct(productId: string, craftCount = 1): boolean {
+    if (!this.products().some(([id]) => id === productId)) return false;
+    const previousProductId = this.selections[0]?.productId;
+    this.selections = this.selections.filter((selection, index) => index === 0 || selection.productId !== productId);
+    const selection = { productId, craftCount: Math.max(1, Math.trunc(craftCount)) };
+    if (this.selections.length) this.selections[0] = selection;
+    else this.selections.push(selection);
+    if (previousProductId) this.completed.delete(previousProductId);
+    this.completed.delete(productId);
+    this.render();
+    return true;
+  }
+
   private products(): Array<[string, string]> {
     const products = new Map<string, string>();
     this.recipes.forEach(recipe => products.set(idOf(recipe.produit.id), recipe.produit.article));

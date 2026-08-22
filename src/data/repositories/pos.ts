@@ -5,6 +5,7 @@ import { callRpc, getSupabaseClient } from "../supabase";
 
 export interface BasketLine { article_id: string | number; quantite: number }
 export interface PermitWithdrawal { article_id: string | number; permit_id: string | number }
+export const orderToBasketStorageKey = "ombrelune-order-to-basket";
 export interface PreparedOrder {
   id: string | number;
   clientName: string;
@@ -83,14 +84,15 @@ export async function getTicketCount(clientId: ClientRow["id"]): Promise<number>
   return state.ticket_session === session ? state.tickets_retires : 0;
 }
 
-export async function checkout(lines: BasketLine[], ticketClientId: ClientRow["id"] | null, withdrawals: PermitWithdrawal[]): Promise<number> {
+export async function checkout(lines: BasketLine[], ticketClientId: ClientRow["id"] | null, withdrawals: PermitWithdrawal[], orderIds: PreparedOrder["id"][] = []): Promise<number> {
   const employee = readEmployeeSession();
   if (!employee) throw new Error("Sélectionnez un employé avant de valider.");
-  return callRpc("enregistrer_panier", {
+  return callRpc("enregistrer_panier_commandes", {
     p_vendeur_id: employee.employeeId,
     p_lignes: lines,
     p_client_ticket_id: ticketClientId,
-    p_retraits_permis: withdrawals
+    p_retraits_permis: withdrawals,
+    p_commande_ids: orderIds
   }, z.coerce.number());
 }
 

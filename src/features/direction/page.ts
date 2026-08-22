@@ -46,6 +46,7 @@ const actionLabels: Record<string, string> = {
   order_prepared: "Préparation de commande terminée",
   order_restored: "Commande restaurée",
   order_reverted: "Retour à l’état précédent de la commande",
+  order_sold: "Commande vendue",
   permit_banned: "Permis interdit",
   permit_updated: "Permis modifié",
   permit_validated: "Permis validé",

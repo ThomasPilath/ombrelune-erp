@@ -4,8 +4,8 @@ import { callRpc, getSupabaseClient } from "../supabase";
 import { identifierSchema } from "../schemas";
 
 const stockStateSchema = z.union([
-  z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nonnegative().default(0) }),
-  z.array(z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nonnegative().default(0) }))
+  z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nonnegative().default(0), stock_max: z.coerce.number().int().nonnegative().nullable().optional() }),
+  z.array(z.object({ quantite: z.coerce.number().int(), stock_min: z.coerce.number().int().nonnegative().default(0), stock_max: z.coerce.number().int().nonnegative().nullable().optional() }))
 ]).nullable().optional();
 
 const recipeRowSchema = z.object({
@@ -26,7 +26,7 @@ export type RecipeRow = z.infer<typeof recipeRowSchema>;
 export async function getCraftRecipes(): Promise<RecipeRow[]> {
   const { data, error } = await getSupabaseClient()
     .from("recettes_craft")
-    .select("produit_id,ingredient_id,quantite_requise,quantite_produite,produit:catalogue!produit_id(id,article,stocks(quantite,stock_min)),ingredient:catalogue!ingredient_id(id,article,stocks(quantite))")
+    .select("produit_id,ingredient_id,quantite_requise,quantite_produite,produit:catalogue!produit_id(id,article,stocks(quantite,stock_min,stock_max)),ingredient:catalogue!ingredient_id(id,article,stocks(quantite))")
     .order("produit_id")
     .order("ingredient_id");
   if (error) throw new Error(error.message);
@@ -38,6 +38,7 @@ export interface CraftStockNeed {
   article: string;
   current: number;
   minimum: number;
+  maximum: number | null;
   missing: number;
   craftCount: number;
   resourceUnavailable: boolean;
@@ -57,6 +58,7 @@ export function craftStockNeeds(recipes: RecipeRow[]): CraftStockNeed[] {
     const stock = Array.isArray(stockRelation) ? stockRelation[0] : stockRelation;
     const current = stock?.quantite ?? 0;
     const minimum = stock?.stock_min ?? 0;
+    const maximum = stock?.stock_max ?? null;
     if (current >= minimum) return;
     const missing = minimum - current;
     const craftCount = Math.ceil(missing / recipe.quantite_produite);
@@ -65,6 +67,7 @@ export function craftStockNeeds(recipes: RecipeRow[]): CraftStockNeed[] {
       article: recipe.produit.article,
       current,
       minimum,
+      maximum,
       missing,
       craftCount,
       resourceUnavailable: productRecipes.some(line => ingredientStock(line) < line.quantite_requise * craftCount)

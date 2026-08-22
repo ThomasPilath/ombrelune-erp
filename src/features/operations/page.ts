@@ -6,7 +6,7 @@ import { showToast } from "../../ui/components/toast";
 import { escapeHtml } from "../../ui/html";
 import { CraftPlanner } from "../craft/planner";
 import { craftStockNeeds, getCraftRecipes, type CraftStockNeed } from "../../data/repositories/craft";
-import { searchClients } from "../../data/repositories/pos";
+import { orderToBasketStorageKey, searchClients } from "../../data/repositories/pos";
 import { icon } from "../../ui/icons";
 import { panel } from "../../ui/components/panel";
 import { labelTableControls, responsiveTable } from "../../ui/components/responsive-table";
@@ -20,6 +20,7 @@ const newClientSchema = z.object({
   owl: z.string().trim().regex(/^\d{2,5}$/)
 });
 const money = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+const compactBuybackPrice = (value: number): string => value > 100_000 ? `${money.format(value / 1_000)}k` : money.format(value);
 const alphabetically = (left: Record<string, unknown>, right: Record<string, unknown>): number => String(left.article ?? left.nom_prenom ?? "").localeCompare(String(right.article ?? right.nom_prenom ?? ""), "fr", { sensitivity: "base" });
 const table = (headers: string[], rows: string[][]): string => responsiveTable(headers, rows, { cardsOnMobile: true });
 const sessionId = (): string | number => { const session = readEmployeeSession(); if (!session) throw new Error("Sélectionnez un employé."); return session.employeeId; };
@@ -44,11 +45,12 @@ async function employeeRows(source: string, employeeId: string | number, select 
 }
 
 async function renderCraft(outlet: HTMLElement): Promise<void> {
+  const mayManageMultipleCrafts = ["Patron", "Co-Patron"].includes(readEmployeeSession()?.employeeGrade ?? "");
   const needsHtml = (needs: CraftStockNeed[]): string => needs.length
-    ? `<ul class="divide-y">${needs.map(need => `<li class="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-center sm:gap-6"><span><strong>${escapeHtml(need.article)}</strong>${need.resourceUnavailable ? '<span class="mt-1 block text-sm font-bold text-danger">Ressource indisponible</span>' : ""}</span><span class="text-sm text-muted">Stock : ${need.current} / minimum : ${need.minimum}</span><span class="font-bold text-warning">Manque ${need.missing} · estimation : ${need.craftCount} craft(s)</span><button type="button" data-load-stock-need="${escapeHtml(need.productId)}" class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent">Charger dans l’outil</button></li>`).join("")}</ul>`
+    ? `<ul class="divide-y">${needs.map(need => `<li class="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-6"><span><strong>${escapeHtml(need.article)}</strong>${need.resourceUnavailable ? '<span class="mt-1 block text-sm font-bold text-danger">Ressource indisponible</span>' : ""}</span><span class="text-sm text-muted">Stock : <strong class="text-warning">${need.current}</strong> – min/max : <strong class="text-warning">${need.minimum}/${need.maximum ?? "—"}</strong></span><button type="button" data-load-stock-need="${escapeHtml(need.productId)}" class="min-h-11 rounded-xl border border-accent px-3 font-bold text-accent">Charger dans l’outil</button></li>`).join("")}</ul>`
     : '<p class="p-4 text-sm text-muted">Tous les objets craftables respectent leur seuil minimum.</p>';
   const initialNeeds = craftStockNeeds(await getCraftRecipes());
-  outlet.innerHTML = `${panel("Lancer une fabrication", '<div id="craft-planner" class="p-5"></div>')}<details data-stock-needs ${initialNeeds.length ? "open" : ""} class="mt-5 overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><summary class="flex min-h-12 cursor-pointer items-center justify-between gap-4 px-5 py-3 font-bold">Besoins du stock <span data-stock-needs-count class="rounded-full bg-surface-muted px-3 py-1 text-sm text-muted">${initialNeeds.length}</span></summary><div data-stock-needs-list class="border-t" aria-live="polite">${needsHtml(initialNeeds)}</div></details>`;
+  outlet.innerHTML = `<div class="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start"><div>${panel("Lancer une fabrication", '<div id="craft-planner" class="p-5"></div>')}</div><details data-stock-needs ${initialNeeds.length ? "open" : ""} class="overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><summary class="flex min-h-12 cursor-pointer items-center justify-between gap-4 px-5 py-3 font-bold">Besoins du stock <span data-stock-needs-count class="rounded-full bg-surface-muted px-3 py-1 text-sm text-muted">${initialNeeds.length}</span></summary><div data-stock-needs-list class="border-t" aria-live="polite">${needsHtml(initialNeeds)}</div></details></div>`;
   const needsList = outlet.querySelector<HTMLElement>("[data-stock-needs-list]")!;
   const needsCount = outlet.querySelector<HTMLElement>("[data-stock-needs-count]")!;
   const plannerRoot = outlet.querySelector<HTMLElement>("#craft-planner")!;
@@ -57,12 +59,12 @@ async function renderCraft(outlet: HTMLElement): Promise<void> {
     needsList.innerHTML = needsHtml(needs);
     needsCount.textContent = String(needs.length);
   };
-  const planner = new CraftPlanner(plannerRoot, { maxItems: 3, onCrafted: refreshNeeds });
+  const planner = new CraftPlanner(plannerRoot, { maxItems: 3, allowAdd: mayManageMultipleCrafts, onCrafted: refreshNeeds });
   await planner.mount();
   needsList.addEventListener("click", event => {
     const button = (event.target as Element).closest<HTMLButtonElement>("[data-load-stock-need]");
     if (!button) return;
-    planner.selectProduct(button.dataset.loadStockNeed!, 1);
+    planner.loadProduct(button.dataset.loadStockNeed!, 1);
   });
 }
 
@@ -109,7 +111,20 @@ const buybackArticleNames: Record<Exclude<BuybackTabId, "all">, Set<string>> = {
 
 function articlesForBuybackTab(articles: Record<string, unknown>[], tab: BuybackTabId): Record<string, unknown>[] {
   if (tab === "all") return articles;
-  return articles.filter(article => buybackArticleNames[tab].has(normalizeArticleName(article.article)));
+  const filtered = articles.filter(article => buybackArticleNames[tab].has(normalizeArticleName(article.article)));
+  if (tab !== "providis") return filtered;
+  return filtered.sort((left, right) => {
+    const priorityDifference = Number(Boolean(preferredSupplierInProvidis(left, tab))) - Number(Boolean(preferredSupplierInProvidis(right, tab)));
+    return priorityDifference || alphabetically(left, right);
+  });
+}
+
+function preferredSupplierInProvidis(article: Record<string, unknown>, tab: BuybackTabId): "Clauser" | "Forge" | null {
+  if (tab !== "providis") return null;
+  const name = normalizeArticleName(article.article);
+  if (buybackArticleNames.clauser.has(name)) return "Clauser";
+  if (buybackArticleNames.forge.has(name)) return "Forge";
+  return null;
 }
 
 function renderBuyback(outlet: HTMLElement, articles: Record<string, unknown>[]): void {
@@ -128,13 +143,20 @@ function renderBuyback(outlet: HTMLElement, articles: Record<string, unknown>[])
   const draw = (preserveText = false): void => {
     const previousText = preserveText ? outlet.querySelector<HTMLTextAreaElement>("#buyback-summary")?.value : undefined;
     const visibleArticles = articlesForBuybackTab(articles, activeTab);
-    const buybackRows = visibleArticles.map(article => { const values = stock(article); return { article, values, suggested: values.maximum == null ? "—" : Math.max(0, values.maximum - values.current), quantity: quantities.get(String(article.id)) ?? 0 }; });
+    const buybackRows = visibleArticles.map(article => { const values = stock(article); return { article, values, suggested: values.maximum == null ? "—" : Math.max(0, values.maximum - values.current), quantity: quantities.get(String(article.id)) ?? 0, preferredSupplier: preferredSupplierInProvidis(article, activeTab) }; });
     const emptyState = '<p class="p-8 text-center text-muted">Aucun article disponible dans cet onglet.</p>';
-    const mobileBuyback = `<div class="grid max-h-[32rem] gap-3 overflow-y-auto p-3 md:hidden">${buybackRows.length ? buybackRows.map(({ article, values, suggested, quantity }) => `<section class="rounded-xl border bg-surface-muted p-4"><div class="flex items-start justify-between gap-3"><div><h3 class="font-bold">${escapeHtml(article.article)}</h3><p class="mt-1 text-sm text-muted">${money.format(Number(article.prix_achat))} PO · stock ${values.current}${values.maximum == null ? "" : `/${values.maximum}`}</p></div><strong>${money.format(quantity * Number(article.prix_achat))} PO</strong></div><div class="mt-4 grid grid-cols-2 gap-3"><p class="text-sm"><span class="block text-xs font-bold text-muted">Qté suggérée</span><strong class="text-success">${suggested}</strong></p><label class="text-xs font-bold text-muted">Qté rachetée<input data-buyback="${escapeHtml(article.id)}" type="number" min="0" value="${quantity}" class="mt-1 min-h-11 w-full rounded-xl border bg-surface px-3 text-base text-ink" aria-label="Quantité rachetée pour ${escapeHtml(article.article)}"></label></div></section>`).join("") : emptyState}</div>`;
-    const desktopBuyback = `<div class="buyback-desktop-list hidden max-h-[32rem] overflow-auto md:block">${buybackRows.length ? `<table class="w-full min-w-[46rem] text-left"><thead class="sticky top-0 z-10 bg-surface-muted text-sm"><tr><th class="px-4 py-3">Article</th><th class="px-4 py-3">Prix d’achat</th><th class="px-4 py-3">Stock</th><th class="px-4 py-3">Qté suggérée</th><th class="px-4 py-3">Qté rachetée</th><th class="px-4 py-3">Coût</th></tr></thead><tbody>${buybackRows.map(({ article, values, suggested, quantity }) => `<tr class="border-t"><td class="px-4 py-3 font-bold">${escapeHtml(article.article)}</td><td class="px-4 py-3">${money.format(Number(article.prix_achat))} PO</td><td class="px-4 py-3 text-muted">${values.current}${values.maximum == null ? "" : ` /${values.maximum}`}</td><td class="px-4 py-3 font-bold text-success">${suggested}</td><td class="px-4 py-3"><input data-buyback="${escapeHtml(article.id)}" type="number" min="0" value="${quantity}" class="min-h-11 w-24 rounded-xl border bg-surface px-3" aria-label="Quantité rachetée pour ${escapeHtml(article.article)}"></td><td class="px-4 py-3 font-bold">${money.format(quantity * Number(article.prix_achat))} PO</td></tr>`).join("")}</tbody></table>` : emptyState}</div>`;
+    const suggestedWithStockTooltip = (article: Record<string, unknown>, suggested: number | string, currentStock: number, preferredSupplier: string | null): string => {
+      const tooltip = `<span role="tooltip" class="pointer-events-none absolute bottom-full left-0 z-20 mb-1 whitespace-nowrap rounded-md bg-backdrop px-2 py-1 text-xs font-normal text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">Stock actuel : ${currentStock}</span>`;
+      const value = typeof suggested === "number"
+        ? `<button type="button" data-buyback-suggested="${escapeHtml(article.id)}" data-suggested="${suggested}" class="inline-flex min-h-11 min-w-11 items-center justify-start font-bold ${preferredSupplier ? "text-muted" : "text-success"} underline-offset-4 hover:underline" aria-label="Utiliser la quantité suggérée de ${suggested} pour ${escapeHtml(article.article)} — stock actuel : ${currentStock}">${suggested}</button>`
+        : `<span class="inline-flex min-h-11 min-w-11 items-center justify-start font-bold ${preferredSupplier ? "text-muted" : "text-success"}">${suggested}</span>`;
+      return `<span class="group relative inline-flex">${value}${tooltip}</span>`;
+    };
+    const mobileBuyback = `<div class="grid max-h-[32rem] gap-3 overflow-y-auto p-3 md:hidden">${buybackRows.length ? buybackRows.map(({ article, values, suggested, quantity, preferredSupplier }) => `<section class="rounded-xl border bg-surface-muted p-4 ${preferredSupplier ? "text-muted" : ""}"><div class="flex items-start justify-between gap-3"><div><h3 class="font-bold">${escapeHtml(article.article)}${preferredSupplier ? `<span class="ml-2 text-xs font-normal text-warning/80">Priorité ${preferredSupplier}</span>` : ""}</h3><p class="mt-1 text-sm text-muted">${compactBuybackPrice(Number(article.prix_achat))} · stock ${values.current}${values.maximum == null ? "" : `/${values.maximum}`}</p></div><strong>${money.format(quantity * Number(article.prix_achat))}</strong></div><div class="mt-4 grid grid-cols-2 gap-3"><p class="text-sm"><span class="block text-xs font-bold text-muted">Qté suggérée</span>${typeof suggested === "number" ? `<button type="button" data-buyback-suggested="${escapeHtml(article.id)}" data-suggested="${suggested}" class="min-h-11 font-bold ${preferredSupplier ? "text-muted" : "text-success"} underline-offset-4 hover:underline" aria-label="Utiliser la quantité suggérée de ${suggested} pour ${escapeHtml(article.article)}">${suggested}</button>` : `<strong class="block py-3 ${preferredSupplier ? "text-muted" : "text-success"}">${suggested}</strong>`}</p><label class="text-xs font-bold text-muted">Qté rachetée<input data-buyback="${escapeHtml(article.id)}" type="number" min="0" value="${quantity}" class="mt-1 min-h-11 w-full rounded-xl border bg-surface px-3 text-base text-ink" aria-label="Quantité rachetée pour ${escapeHtml(article.article)}"></label></div></section>`).join("") : emptyState}</div>`;
+    const desktopBuyback = `<div class="buyback-desktop-list hidden max-h-[32rem] overflow-auto md:block">${buybackRows.length ? `<table class="w-full min-w-[52rem] table-fixed text-left"><colgroup><col class="w-[40%]"><col class="w-[12%]"><col class="w-[17%]"><col class="w-[15%]"><col class="w-[16%]"></colgroup><thead class="sticky top-0 z-10 bg-surface-muted text-sm"><tr><th class="px-3 py-3">Article</th><th class="px-3 py-3">Prix d’achat</th><th class="px-2 py-3">Qté suggérée</th><th class="px-2 py-3">Qté rachetée</th><th class="px-3 py-3">Coût</th></tr></thead><tbody>${buybackRows.map(({ article, values, suggested, quantity, preferredSupplier }) => `<tr class="border-t ${preferredSupplier ? "text-muted" : ""}"><td class="whitespace-nowrap px-3 py-3 font-bold">${escapeHtml(article.article)}${preferredSupplier ? `<span class="ml-2 text-xs font-normal text-warning/80">Priorité ${preferredSupplier}</span>` : ""}</td><td class="px-3 py-3 text-left">${compactBuybackPrice(Number(article.prix_achat))}</td><td class="px-2 py-3 text-left">${suggestedWithStockTooltip(article, suggested, values.current, preferredSupplier)}</td><td class="px-2 py-3 text-left"><input data-buyback="${escapeHtml(article.id)}" type="number" min="0" value="${quantity}" class="min-h-11 w-20 rounded-xl border bg-surface px-3 text-left" aria-label="Quantité rachetée pour ${escapeHtml(article.article)}"></td><td class="whitespace-nowrap px-3 py-3 text-left font-bold">${money.format(quantity * Number(article.prix_achat))}</td></tr>`).join("")}</tbody></table>` : emptyState}</div>`;
     const tabs = `<div class="flex gap-2 overflow-x-auto border-b px-2" role="tablist" aria-label="Filtres de rachat">${buybackTabs.map(tab => { const active = tab.id === activeTab; const count = articlesForBuybackTab(articles, tab.id).length; return `<button id="buyback-tab-${tab.id}" type="button" role="tab" data-buyback-tab="${tab.id}" aria-controls="buyback-list" aria-selected="${active}" tabindex="${active ? 0 : -1}" class="min-h-11 shrink-0 border-b-2 px-3 font-bold ${active ? "border-accent text-accent" : "border-transparent text-muted"}">${tab.label} <span class="text-xs">(${count})</span></button>`; }).join("")}</div>`;
     outlet.innerHTML = `<div class="buyback-workspace grid gap-5">
-      <section class="flex min-h-0 flex-col overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><div class="flex flex-wrap items-center justify-between gap-3 border-b p-5"><h2 class="text-xl font-bold">Matières premières rachetées</h2></div>${tabs}<div id="buyback-list" role="tabpanel" aria-labelledby="buyback-tab-${activeTab}" class="flex min-h-0 flex-1 flex-col">${mobileBuyback}${desktopBuyback}</div></section>
+      <section class="flex min-h-0 flex-col overflow-hidden rounded-2xl border bg-surface shadow-[var(--shadow-panel)]"><div class="flex flex-wrap items-center justify-between gap-3 border-b p-5"><h2 class="text-xl font-bold">Matières premières rachetées</h2><button id="reset-buyback" type="button" ${[...quantities.values()].some(quantity => quantity > 0) ? "" : "disabled"} class="min-h-11 rounded-xl border px-4 font-bold text-danger hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40">Reset</button></div>${tabs}<div id="buyback-list" role="tabpanel" aria-labelledby="buyback-tab-${activeTab}" class="flex min-h-0 flex-1 flex-col">${mobileBuyback}${desktopBuyback}</div></section>
       <aside class="buyback-summary grid gap-5" aria-label="Récapitulatif du rachat">
         <section class="rounded-2xl border border-accent bg-surface p-6 text-center shadow-[var(--shadow-panel)]"><p class="text-sm font-bold text-muted">Total à payer</p><p class="mt-1 text-3xl font-black text-accent">${money.format(total())} PO</p></section>
         <section class="buyback-summary-card flex min-h-0 flex-col rounded-2xl border bg-surface p-5 shadow-[var(--shadow-panel)]"><label for="buyback-summary" class="text-lg font-bold">Résumé pour Discord / RP</label><textarea id="buyback-summary" class="buyback-summary-text mt-3 min-h-48 w-full flex-1 resize-y rounded-xl border bg-surface-muted p-4 font-mono text-sm">${escapeHtml(previousText ?? summary())}</textarea><div class="buyback-summary-actions mt-3 grid shrink-0 gap-3 sm:grid-cols-2"><button id="copy-buyback-text" class="min-h-11 rounded-xl border border-accent font-bold text-accent">Copier le texte</button><button id="apply-buyback-text" class="min-h-11 rounded-xl border font-bold">Appliquer le texte</button></div></section>
@@ -158,6 +180,14 @@ function renderBuyback(outlet: HTMLElement, articles: Record<string, unknown>[])
         requestAnimationFrame(() => outlet.querySelector<HTMLButtonElement>(`[data-buyback-tab="${activeTab}"]`)?.focus());
       });
     });
+    outlet.querySelectorAll<HTMLButtonElement>("[data-buyback-suggested]").forEach(button => button.addEventListener("click", () => {
+      quantities.set(button.dataset.buybackSuggested!, Number(button.dataset.suggested));
+      draw();
+    }));
+    outlet.querySelector<HTMLButtonElement>("#reset-buyback")!.addEventListener("click", () => {
+      quantities.clear();
+      draw();
+    });
     outlet.querySelectorAll<HTMLInputElement>("[data-buyback]").forEach(input => input.addEventListener("change", () => { quantities.set(input.dataset.buyback!, Math.max(0, Math.trunc(Number(input.value) || 0))); draw(); }));
     outlet.querySelector("#copy-buyback-text")!.addEventListener("click", async () => { try { await navigator.clipboard.writeText(outlet.querySelector<HTMLTextAreaElement>("#buyback-summary")!.value); showToast("Texte copié.", "success"); } catch { showToast("Copie impossible : sélectionnez puis copiez le texte manuellement.", "error"); } });
     outlet.querySelector("#apply-buyback-text")!.addEventListener("click", () => {
@@ -179,8 +209,24 @@ async function renderOrders(outlet: HTMLElement): Promise<void> {
   const sellable = articles.filter(article => Number(article.prix_vente) > 0).sort(alphabetically);
   const selectable = sellable.filter(article => !isCompassSupplement(article.article));
   const supplement = sellable.find(article => isCompassSupplement(article.article));
-  const form = `<form id="order-form" class="space-y-5 p-5"><div><p class="text-sm font-bold">Client</p><div class="mt-2 grid gap-3 sm:grid-cols-2"><label class="text-sm font-bold">Nom et prénom<input id="order-client-name" autocomplete="off" class="mt-2 ${field}" placeholder="Rechercher par nom…"></label><label class="text-sm font-bold">Hibou<input id="order-client-owl" autocomplete="off" class="mt-2 ${field}" placeholder="Rechercher par hibou…"></label></div><div id="order-client-results" class="mt-2 max-h-52 overflow-y-auto rounded-xl border" hidden></div><p id="order-client-status" class="mt-2 text-sm text-muted" hidden></p></div><details class="rounded-xl border bg-surface-muted"><summary class="flex min-h-11 cursor-pointer items-center px-4 py-3 font-bold">Ajouter une note <span class="ml-2 text-sm font-normal text-muted">(facultatif)</span></summary><div class="border-t p-4"><label class="block text-sm font-bold">Note<textarea name="notes" class="mt-2 min-h-24 w-full rounded-xl border bg-surface p-3" placeholder="Informations utiles pour la commande…"></textarea></label></div></details><div><div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-bold">Objets commandés</h3><button type="button" id="add-order-line" class="${secondaryButton}">+ Ajouter un objet</button></div><div id="order-lines" class="space-y-3"></div></div><div class="flex flex-wrap items-center justify-between gap-4 border-t pt-5"><p>Total estimé : <strong id="order-total" class="text-xl">0 PO</strong></p><button class="${primaryButton}">Créer la commande</button></div></form>`;
-  outlet.innerHTML = `${panel("Nouvelle commande", form)}<div class="mt-5">${panel("Commandes", table(["Client", "Contenu", "Notes", "Date", "Total", "État", "Actions"], orders.map(order => { const client = order.clients as Record<string, unknown> | null; const orderLines = order.lignes_commandes as Record<string, unknown>[] | null; const next = order.statut_livraison === "En préparation" ? "Prêt" : order.statut_livraison === "Prêt" ? "Livré" : null; const mayCancel = !["Livré", "Annulée"].includes(String(order.statut_livraison)); const isCancelled = order.statut_livraison === "Annulée"; const mayReverse = ["Prêt", "Livré", "Annulée"].includes(String(order.statut_livraison)); const reverseAction = isCancelled ? "Restauration" : "Retour arrière"; const reverseLabel = isCancelled ? "Restaurer la commande" : `Revenir à l’état précédent depuis ${order.statut_livraison}`; const label = escapeHtml(client?.nom_prenom ?? order.client_nom ?? "ce client"); const content = orderLines?.length ? orderLines.map(line => `${line.article_nom} × ${line.quantite}`).join(", ") : "—"; const actions = `<div class="flex justify-end gap-2">${next ? `<button data-order="${order.id}" data-next="${next}" class="min-h-10 rounded-lg border px-3 font-bold">Marquer ${next === "Prêt" ? "préparée" : "livrée"}</button>` : ""}${mayCancel ? `<button data-cancel-order="${order.id}" data-cancel-label="${label}" class="grid size-10 place-items-center rounded-lg border text-danger" aria-label="Annuler la commande" title="Annuler la commande">×</button>` : ""}${mayReverse ? `<button data-restore-order="${order.id}" data-reverse-action="${reverseAction}" class="grid size-10 place-items-center rounded-lg border text-accent" aria-label="${escapeHtml(reverseLabel)}" title="${escapeHtml(reverseLabel)}">${icon("reverse", "size-5")}</button>` : ""}${isCancelled ? `<button data-delete-order="${order.id}" data-delete-label="${label}" class="grid size-10 place-items-center rounded-lg border text-danger" aria-label="Supprimer définitivement la commande" title="Supprimer définitivement">${icon("trash", "size-5")}</button>` : ""}</div>`; return [escapeHtml(client?.nom_prenom ?? order.client_nom ?? "Client archivé"), escapeHtml(content), escapeHtml(order.contenu ?? "—"), new Date(String(order.date_commande)).toLocaleDateString("fr-FR"), `${money.format(Number(order.prix_total))} PO`, escapeHtml(order.statut_livraison), actions || "—"]; })))}</div>`;
+  const form = `<form id="order-form" class="space-y-5 p-5"><div><p class="text-sm font-bold">Client</p><div class="mt-2 grid gap-3 sm:grid-cols-2"><label class="text-sm font-bold">Nom et prénom<input id="order-client-name" autocomplete="off" class="mt-2 ${field}" placeholder="Rechercher par nom…"></label><label class="text-sm font-bold">Hibou<input id="order-client-owl" autocomplete="off" class="mt-2 ${field}" placeholder="Rechercher par hibou…"></label></div><div id="order-client-results" class="mt-2 max-h-52 overflow-y-auto rounded-xl border" hidden></div><p id="order-client-status" class="mt-2 text-sm text-muted" hidden></p></div><div><div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-bold">Objets commandés</h3><button type="button" id="add-order-line" class="${secondaryButton}">+ Ajouter un objet</button></div><div id="order-lines" class="space-y-3"></div></div><details class="rounded-xl border bg-surface-muted"><summary class="flex min-h-11 cursor-pointer items-center px-4 py-3 font-bold">Ajouter une note <span class="ml-2 text-sm font-normal text-muted">(facultatif)</span></summary><div class="border-t p-4"><label class="block text-sm font-bold">Note<textarea name="notes" class="mt-2 min-h-24 w-full rounded-xl border bg-surface p-3" placeholder="Informations utiles pour la commande…"></textarea></label></div></details><div class="flex flex-wrap items-center justify-between gap-4 border-t pt-5"><p>Total estimé : <strong id="order-total" class="text-xl">0 PO</strong></p><button class="${primaryButton}">Créer la commande</button></div></form>`;
+  const orderCards = orders.length ? `<div class="grid max-h-[42rem] gap-3 overflow-y-auto p-3 overscroll-contain">${orders.map(order => {
+    const client = order.clients as Record<string, unknown> | null;
+    const orderLines = order.lignes_commandes as Record<string, unknown>[] | null;
+    const status = String(order.statut_livraison);
+    const next = ["En attente", "En préparation"].includes(status) ? "Prêt" : null;
+    const mayCancel = !["Vendu", "Livré", "Annulée"].includes(status);
+    const isCancelled = status === "Annulée";
+    const mayReverse = ["Prêt", "Annulée"].includes(status);
+    const reverseAction = isCancelled ? "Restauration" : "Retour arrière";
+    const reverseLabel = isCancelled ? "Restaurer la commande" : `Revenir à l’état précédent depuis ${status}`;
+    const clientName = escapeHtml(client?.nom_prenom ?? order.client_nom ?? "Client archivé");
+    const articleList = orderLines?.length ? `<ul class="grid gap-1">${orderLines.map(line => `<li class="flex min-w-0 items-baseline justify-between gap-4"><span class="truncate">${escapeHtml(line.article_nom ?? "Article archivé")}</span><strong class="shrink-0">× ${escapeHtml(line.quantite ?? 0)}</strong></li>`).join("")}</ul>` : '<p class="text-sm text-muted">Aucun article.</p>';
+    const statusClass = ["Vendu", "Livré"].includes(status) ? "bg-success/10 text-success" : isCancelled ? "bg-danger/10 text-danger" : status === "Prêt" ? "bg-accent/10 text-accent" : "bg-warning/10 text-warning";
+    const actions = `${next ? `<button data-order="${order.id}" data-next="${next}" class="min-h-9 rounded-lg border border-accent px-3 text-sm font-bold text-accent">Préparer</button>` : ""}${status === "Prêt" ? `<a href="/caisse" data-add-order-basket="${escapeHtml(order.id)}" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand px-3 text-center text-sm font-bold text-white">Ajouter au panier</a>` : ""}${mayReverse ? `<button data-restore-order="${order.id}" data-reverse-action="${reverseAction}" class="grid size-9 place-items-center rounded-lg border text-accent" aria-label="${escapeHtml(reverseLabel)}" title="${escapeHtml(reverseLabel)}">${icon("reverse", "size-3.5")}</button>` : ""}${mayCancel ? `<button data-cancel-order="${order.id}" data-cancel-label="${clientName}" class="grid size-9 place-items-center rounded-lg border text-danger" aria-label="Annuler la commande" title="Annuler la commande">×</button>` : ""}${isCancelled ? `<button data-delete-order="${order.id}" data-delete-label="${clientName}" class="grid size-9 place-items-center rounded-lg border text-danger" aria-label="Supprimer définitivement la commande" title="Supprimer définitivement">${icon("trash", "size-3.5")}</button>` : ""}`;
+    return `<article class="overflow-hidden rounded-xl border bg-surface-muted shadow-sm"><header class="grid items-center gap-2 border-b px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]"><div class="min-w-0"><h3 class="truncate font-bold">${clientName} <span class="ml-1 text-xs font-normal text-muted">(${new Date(String(order.date_commande)).toLocaleDateString("fr-FR")})</span></h3></div><span class="w-fit rounded-full px-2.5 py-1 text-xs font-bold ${statusClass}">${escapeHtml(status)}</span><strong class="whitespace-nowrap text-base sm:min-w-24 sm:text-right">${money.format(Number(order.prix_total))} PO</strong></header>${order.contenu ? `<p class="border-b px-3 py-2 text-sm text-muted">${escapeHtml(order.contenu)}</p>` : ""}<div class="grid items-end gap-3 p-3 sm:grid-cols-2"><div class="min-w-0 rounded-lg bg-surface px-3 py-2 text-sm">${articleList}</div>${actions ? `<div class="flex shrink-0 flex-wrap items-center justify-end gap-1 self-end">${actions}</div>` : ""}</div></article>`;
+  }).join("")}</div>` : '<p class="p-8 text-center text-muted">Aucune commande pour le moment.</p>';
+  outlet.innerHTML = `<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start"><div>${panel("Nouvelle commande", form)}</div><div>${panel("Commandes", orderCards)}</div></div>`;
   const lines: Array<{ articleId: string; quantity: number; automatic?: boolean }> = selectable.length ? [{ articleId: String(selectable[0]!.id), quantity: 1 }] : [];
   let compassWithSupplement: boolean | null = null;
   let selectedClientId: string | number | null = null;
@@ -216,7 +262,8 @@ async function renderOrders(outlet: HTMLElement): Promise<void> {
   const confirmStatusChange = (title: string, description: string, confirmLabel: string): Promise<boolean> => {
     return confirmDialog({ title, description, confirmLabel, size: "small" });
   };
-  outlet.querySelectorAll<HTMLButtonElement>("[data-order]").forEach(button => button.addEventListener("click", async () => { const next = button.dataset.next!; if (!await confirmStatusChange("Confirmer le changement d’état", `Passer cette commande à l’état « ${next} » ? L’action sera journalisée avec l’employé sélectionné.`, "Confirmer")) return; try { await callRpc("gerer_commande", { p_commande_id: button.dataset.order, p_employe_id: sessionId(), p_action: next === "Prêt" ? "Préparation terminée" : "Livraison" }, z.null()); showToast("Commande mise à jour et action journalisée.", "success"); await renderOrders(outlet); } catch (e) { showToast(e instanceof Error ? e.message : "Modification impossible", "error"); } }));
+  outlet.querySelectorAll<HTMLButtonElement>("[data-order]").forEach(button => button.addEventListener("click", async () => { const next = button.dataset.next!; if (!await confirmStatusChange("Confirmer le changement d’état", `Passer cette commande à l’état « ${next} » ? L’action sera journalisée avec l’employé sélectionné.`, "Confirmer")) return; try { await callRpc("gerer_commande", { p_commande_id: button.dataset.order, p_employe_id: sessionId(), p_action: "Préparation terminée" }, z.null()); showToast("Commande prête à être ajoutée au panier.", "success"); await renderOrders(outlet); } catch (e) { showToast(e instanceof Error ? e.message : "Modification impossible", "error"); } }));
+  outlet.querySelectorAll<HTMLAnchorElement>("[data-add-order-basket]").forEach(link => link.addEventListener("click", () => sessionStorage.setItem(orderToBasketStorageKey, link.dataset.addOrderBasket!)));
   outlet.querySelectorAll<HTMLButtonElement>("[data-cancel-order]").forEach(button => button.addEventListener("click", async () => {
     if (!await confirmDialog({ title: "Annuler la commande ?", description: `La commande de ${button.dataset.cancelLabel} restera dans l’historique avec le statut « Annulée ».`, cancelLabel: "Conserver", confirmLabel: "Confirmer l’annulation", variant: "danger", size: "small" })) return;
     try { await callRpc("gerer_commande", { p_commande_id: button.dataset.cancelOrder, p_employe_id: sessionId(), p_action: "Annulation" }, z.null()); showToast("Commande annulée et action journalisée.", "success"); await renderOrders(outlet); } catch (error) { showToast(error instanceof Error ? error.message : "Annulation impossible.", "error"); }
@@ -317,11 +364,18 @@ async function renderTreasury(outlet: HTMLElement): Promise<void> {
   outlet.querySelector<HTMLFormElement>("#treasury-form")!.addEventListener("submit", async event => { event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement); try { await callRpc("enregistrer_controle_tresorerie", { p_employe_id: sessionId(), p_montant_saisi: Number(data.get("amount")), p_notes: data.get("notes") }, z.coerce.number()); showToast("Contrôle enregistré.", "success"); await renderTreasury(outlet); } catch (e) { showToast(e instanceof Error ? e.message : "Contrôle impossible", "error"); } });
 }
 
+async function renderManagement(outlet: HTMLElement): Promise<void> {
+  outlet.innerHTML = `<div class="management-workspace grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]"><div class="management-treasury" data-management-treasury></div><div class="management-clients" data-management-clients></div></div>`;
+  const treasuryRoot = outlet.querySelector<HTMLElement>("[data-management-treasury]")!;
+  const clientsRoot = outlet.querySelector<HTMLElement>("[data-management-clients]")!;
+  await Promise.all([renderTreasury(treasuryRoot), renderSimple(clientsRoot, "clients")]);
+}
+
 async function renderSimple(outlet: HTMLElement, pageId: string): Promise<void> {
   if (pageId === "clients") {
     const data = (await rows("clients_actifs")).sort(alphabetically);
     const normalize = (value: unknown): string => String(value ?? "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("fr");
-    outlet.innerHTML = panel("Fichier client", '<div class="border-b p-4"><input id="client-search" type="search" placeholder="Rechercher par nom ou hibou…" class="min-h-11 w-full rounded-xl border bg-surface px-4" aria-label="Rechercher un client"></div><div id="client-list"></div>', '<button type="button" data-add-client class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Ajouter un client</button>');
+    outlet.innerHTML = panel("Fichier client", '<div class="border-b p-4"><input id="client-search" type="search" placeholder="Rechercher par nom ou hibou…" class="min-h-11 w-full rounded-xl border bg-surface px-4" aria-label="Rechercher un client"></div><div id="client-list" class="max-h-[36rem] overflow-y-auto lg:max-h-none"></div>', '<button type="button" data-add-client class="min-h-11 rounded-xl bg-brand px-4 font-bold text-white">Ajouter un client</button>');
     const list = outlet.querySelector<HTMLElement>("#client-list")!; const search = outlet.querySelector<HTMLInputElement>("#client-search")!;
     const openClientEditor = (client: Record<string, unknown>): void => {
       const dialog = document.createElement("dialog"); dialog.className = "m-auto w-[min(34rem,calc(100%-2rem))] rounded-2xl border bg-surface p-0 text-ink shadow-2xl backdrop:bg-backdrop";
@@ -395,6 +449,7 @@ export async function mountOperationsPage(outlet: HTMLElement, pageId: string): 
     else if (pageId === "rachat") await renderPurchase(outlet);
     else if (pageId === "commandes") await renderOrders(outlet);
     else if (pageId === "permis") await renderPermits(outlet);
+    else if (pageId === "gestion") await renderManagement(outlet);
     else if (pageId === "tresorerie") await renderTreasury(outlet);
     else if (pageId === "clients") await renderSimple(outlet, pageId);
     else if (pageId === "dashboard") await renderDashboard(outlet);
@@ -402,7 +457,11 @@ export async function mountOperationsPage(outlet: HTMLElement, pageId: string): 
     else outlet.innerHTML = panel("Fonction à venir", '<p class="p-6 text-muted">Cette fonction appartient au futur espace Direction.</p>');
   } catch (error) { if (active) { outlet.innerHTML = asyncState("error", error instanceof Error ? error.message : undefined, "Réessayer"); bindRetry(outlet, () => void mountOperationsPage(outlet, pageId)); } }
   labelTableControls(outlet);
-  const handleEmployeeChange = (): void => { if (pageId === "dashboard" && active) void renderDashboard(outlet); };
+  const handleEmployeeChange = (): void => {
+    if (!active) return;
+    if (pageId === "dashboard") void renderDashboard(outlet);
+    else if (pageId === "craft") void renderCraft(outlet);
+  };
   window.addEventListener("ombrelune:employee-change", handleEmployeeChange);
   return () => { active = false; window.removeEventListener("ombrelune:employee-change", handleEmployeeChange); };
 }

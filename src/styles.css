@@ -91,6 +91,39 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 @media (min-width: 1024px) and (min-height: 600px) {
+  .management-workspace {
+    height: calc(100dvh - 9rem);
+    align-items: stretch;
+  }
+  .management-treasury {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .management-treasury > .mt-5 {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 0%;
+  }
+  .management-treasury > .mt-5 > section,
+  .management-clients > section {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 0%;
+    flex-direction: column;
+  }
+  .management-treasury > .mt-5 > section > :last-child,
+  .management-clients #client-list {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 0%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .management-clients {
+    display: flex;
+    min-height: 0;
+  }
   .buyback-workspace {
     height: calc(100dvh - 9rem);
     grid-template-columns: minmax(0, 3fr) minmax(22rem, 2fr);
