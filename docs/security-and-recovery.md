@@ -6,7 +6,7 @@ Ombrelune est un ERP fictif utilisé entre joueurs de confiance. La stratégie r
 
 Nginx applique des en-têtes simples contre le sniffing de contenu, les referrers trop détaillés, l'intégration par un site tiers et l'accès inutile aux périphériques. La CSP autorise uniquement les ressources locales, Supabase et Google Fonts.
 
-La CSP conserve temporairement `unsafe-inline` pour rester compatible avec le script de thème actuel. Le domaine Umami devra être ajouté à `script-src` et `connect-src` lors de son intégration.
+La CSP conserve temporairement `unsafe-inline` pour rester compatible avec le script de thème actuel.
 
 ## État des rendus HTML
 

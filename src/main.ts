@@ -7,7 +7,6 @@ import { hasDirectionAccess } from "./core/employee-session";
 import { getPage } from "./core/pages";
 import { showToast } from "./ui/components/toast";
 import { getPublicEnv } from "./config/env";
-import { initializeAnalytics } from "./core/analytics";
 
 function renderStartupError(error: unknown): void {
   const message = error instanceof Error ? error.message : "Configuration invalide.";
@@ -17,7 +16,7 @@ function renderStartupError(error: unknown): void {
 
 try {
   applyInitialTheme();
-  initializeAnalytics(getPublicEnv());
+  getPublicEnv();
   document.documentElement.style.removeProperty("background-color");
   document.documentElement.style.removeProperty("color");
 } catch (error) {

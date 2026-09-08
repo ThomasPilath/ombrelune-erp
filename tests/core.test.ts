@@ -41,21 +41,14 @@ describe("configuration publique", () => {
     VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_1234567890"
   };
 
-  test("accepte les statistiques complètement configurées", () => {
-    expect(parsePublicEnv({
-      ...required,
-      VITE_UMAMI_SCRIPT_URL: "https://stats.example.com/script.js",
-      VITE_UMAMI_WEBSITE_ID: "00000000-0000-4000-8000-000000000000"
-    }).VITE_UMAMI_WEBSITE_ID).toBeTruthy();
+  test("accepte la configuration Supabase requise", () => {
+    expect(parsePublicEnv(required)).toEqual(required);
   });
 
   test("refuse une URL Supabase invalide", () => {
     expect(() => parsePublicEnv({ ...required, VITE_SUPABASE_URL: "invalid" })).toThrow();
   });
 
-  test("refuse une configuration Umami partielle", () => {
-    expect(() => parsePublicEnv({ ...required, VITE_UMAMI_SCRIPT_URL: "https://stats.example.com/script.js" })).toThrow();
-  });
 });
 
 describe("session employé", () => {

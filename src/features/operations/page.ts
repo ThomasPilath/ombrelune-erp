@@ -92,7 +92,7 @@ const citizenBuybackArticles = [
 ];
 const clauserBuybackArticles = ["Eau minérale pure", "Poudre de corne de licorne", "Fiole de rosée du matin", "Aconit"];
 const forgeBuybackArticles = ["Fil d'argent", "Cristal arc-en-ciel"];
-const otherBuybackArticles = ["Booster commun", "Booster Arcane", "Booster legendaire", "Ticket à gratter"];
+const otherBuybackArticles = ["Ticket à gratter"];
 const providisBuybackArticles = [...new Set([...citizenBuybackArticles, ...clauserBuybackArticles, ...forgeBuybackArticles])];
 
 const normalizeArticleName = (value: unknown): string => String(value ?? "")

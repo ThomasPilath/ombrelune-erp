@@ -31,21 +31,8 @@ begin
     'Avant 15 h à Madrid, le quota appartient à la session de la veille';
   assert public.session_jeu('2026-08-19 13:00:00+00'::timestamptz) = '2026-08-19'::date,
     'À 15 h à Madrid, une nouvelle session de tickets commence';
-  assert (select count(*) from public.client_permits) = 3,
-    'Le référentiel local ne contient que les trois permis balais attendus';
-  assert exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '1110' and permis.type = 'broomstick' and permis.status = 'pending'
-  ), 'Filian Dinwiddy possède un permis balais non validé';
-  assert exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '31863' and permis.type = 'broomstick' and permis.status = 'accepted'
-  ), 'Aurélia Ambrosia possède un permis balais validé';
-  assert exists (
-    select 1 from public.client_permits permis join public.clients client on client.id = permis.client_id
-    where client.hibou = '62771' and lower(client.nom_prenom) = 'elias moonwhisper'
-      and permis.type = 'broomstick' and permis.status = 'sold'
-  ), 'Elias Moonwhisper possède un permis balais validé et retiré';
+  assert (select count(*) from public.client_permits) = 0,
+    'Le seed ne précharge aucun dossier de permis';
 
   select id into employe_id from public.employes order by id limit 1;
   select catalogue.id into article_id
